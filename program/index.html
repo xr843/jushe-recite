@@ -181,7 +181,15 @@
   }
   .player .pbtn.main { width: 52px; height: 52px; font-size: 20px; background: var(--accent); color: #fff; border-color: var(--accent); }
   .player .pbtn:hover { transform: scale(1.05); }
-  .player .pbtn.loop.active { background: var(--accent-soft); color: #fff; border-color: var(--accent-soft); }
+  .player .pbtn.loop.active {
+    background: var(--accent-soft); color: #fff; border-color: var(--accent-soft);
+    box-shadow: 0 0 0 3px rgba(201,169,106,.35);
+  }
+  .player .pbtn.loop.active::after {
+    content: ""; position: absolute; bottom: -2px; left: 50%; transform: translateX(-50%);
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  }
+  .player .pbtn { position: relative; }
   .player .clear { display: block; margin: 12px auto 0; font-size: 12px; color: var(--ink-soft); background: none; border: none; text-decoration: underline; }
 
   /* ---------- 设置弹层 ---------- */
@@ -828,7 +836,8 @@
     if (engine.mode === "sequence" && engine.queue.length) {
       var v = byId[engine.queue[engine.index]];
       var prefix = engine.paused ? '已暂停　' : '正在连播　';
-      np.innerHTML = prefix + '<b>' + (engine.index + 1) + ' / ' + engine.queue.length + '</b>　' + pinLabel(v);
+      var loopBadge = (savedSeqLoop || engine.looping) ? ' <span style="color:var(--accent);font-weight:600">🔁循环中</span>' : '';
+      np.innerHTML = prefix + '<b>' + (engine.index + 1) + ' / ' + engine.queue.length + '</b>　' + pinLabel(v) + loopBadge;
     } else if (engine.mode === "single" && engine.timer) {
       var sv = byId[engine.queue[0]];
       np.innerHTML = '单颂' + (engine.looping ? '循环' : '播放') + '　<b>' + pinLabel(sv) + '</b>';
