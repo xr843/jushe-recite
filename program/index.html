@@ -335,6 +335,8 @@
   var LS_SEL = "kusha_selected_v1";
   var LS_RATE = "kusha_rate_v1";
   var LS_VOL = "kusha_vol_v1";
+  var LS_LAST = "kusha_last_v1";          // 上次背到哪一颂的 id
+  var LS_LOOP = "kusha_loop_v1";          // 列表循环开关
   var selected = loadSelected();          // Set of verse id（今日背诵）
   var rate = parseFloat(localStorage.getItem(LS_RATE) || "1");
   var vol = parseFloat(localStorage.getItem(LS_VOL) || "1");
@@ -498,6 +500,31 @@
     });
   }
 
+  // 上次背到哪一颂：在 engine.index 变化时记录，下次刷新自动恢复
+  function saveLastPosition() {
+    if (engine.mode === "sequence" && engine.queue.length > 0) {
+      var id = engine.queue[engine.index];
+      if (id) localStorage.setItem(LS_LAST, id);
+    }
+  }
+  function clearLastPosition() { localStorage.removeItem(LS_LAST); }
+  function restoreLastPosition() {
+    var savedId = localStorage.getItem(LS_LAST);
+    if (!savedId || !selected.has(savedId)) return;
+    var list = selectedOrdered();
+    if (!list.length) return;
+    var ids = list.map(function (v) { return v.id; });
+    var idx = ids.indexOf(savedId);
+    if (idx < 0) return;
+    engine.mode = "sequence";
+    engine.queue = ids;
+    engine.index = idx;
+    engine.paused = true;
+    engine.looping = savedSeqLoop;
+    renderToday();
+    syncPlayingUI();
+  }
+
   // 本品全选 / 取消本品
   function versesInPin(pin) {
     return VERSES.filter(function (v) { return v.pin === pin; });
@@ -659,6 +686,7 @@
   // 载入并从该颂起点开始播放当前 queue[index]
   function playCurrent() {
     var id = engine.queue[engine.index];
+    saveLastPosition();
     var t = TIMINGS[id];
     if (!t) {                                   // 该颂还没对齐时间戳
       pulse(document.getElementById("nowPlaying"), "该颂尚无音频时间点");
@@ -776,9 +804,10 @@
     renderToday(); scrollToCurrent();
     playCurrent();
   }
-  var savedSeqLoop = false;
+  var savedSeqLoop = localStorage.getItem(LS_LOOP) === "1";
   function onSeqLoopToggle() {
     savedSeqLoop = !savedSeqLoop;
+    localStorage.setItem(LS_LOOP, savedSeqLoop ? "1" : "0");
     if (engine.mode === "sequence") engine.looping = savedSeqLoop;
     syncPlayingUI();
   }
@@ -797,6 +826,7 @@
     engine.index += delta;
     if (engine.index < 0) engine.index = engine.looping ? engine.queue.length - 1 : 0;
     if (engine.index >= engine.queue.length) engine.index = engine.looping ? 0 : engine.queue.length - 1;
+    saveLastPosition();
     renderToday(); scrollToCurrent();
     if (wasPlaying) { playCurrent(); }   // 若在播放，跳到目标颂继续播
     else { syncPlayingUI(); }
@@ -877,6 +907,7 @@
     document.querySelectorAll("[data-check]").forEach(function (cb) { cb.checked = false; });
     if (view === "today") renderMain();
     else refreshPinSelButtons();
+    clearLastPosition();    // 列表清空后，"上次背到哪"已经没有上下文，一并清掉
   });
   document.getElementById("btnSettings").addEventListener("click", openSettings);
   document.getElementById("btnCloseSettings").addEventListener("click", closeSettings);
@@ -913,6 +944,7 @@
   renderMain();
   renderToday();
   updateBadges();
+  restoreLastPosition();
 })();
 </script>
 <script>
