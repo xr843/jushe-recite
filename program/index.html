@@ -748,6 +748,12 @@
     if (engine.mode === "sequence" && engine.timer) { pauseSequence(); return; }
     // 已暂停 → 续播
     if (engine.mode === "sequence" && engine.paused) { resumeSequence(); return; }
+    // 用 ⏮/⏭ 定位过但还没播过 → 从当前 index 开播（别重置成 0）
+    if (engine.mode === "sequence" && engine.queue.length > 0) {
+      renderToday(); scrollToCurrent();
+      playCurrent();
+      return;
+    }
     // 否则：开始新一轮连播
     var list = selectedOrdered();
     if (list.length === 0) { pulse(document.getElementById("nowPlaying"), "请先勾选要背的颂"); return; }
