@@ -315,7 +315,7 @@
         <span><input type="range" id="volRange" min="0" max="1" step="0.05"> <b id="volVal">100</b> %</span>
       </div>
       <div style="font-size:11px;color:var(--ink-soft);text-align:center;margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">
-        版本 <code id="appVersion" style="font-family:monospace">2026-06-08-r9</code>
+        版本 <code id="appVersion" style="font-family:monospace">2026-06-08-r10</code>
       </div>
       <button class="close" id="btnCloseSettings">完成</button>
     </div>
@@ -503,6 +503,24 @@
     });
   }
 
+  // 点击右栏列表中某颂 → 跳到那颂并立即播放
+  function jumpToVerse(id) {
+    if (!selected.has(id)) return;
+    var list = selectedOrdered();
+    if (!list.length) return;
+    var ids = list.map(function (v) { return v.id; });
+    var idx = ids.indexOf(id);
+    if (idx < 0) return;
+    engine.mode = "sequence";
+    engine.queue = ids;
+    engine.index = idx;
+    engine.paused = false;
+    engine.looping = savedSeqLoop;
+    renderToday();
+    scrollToCurrent();
+    playCurrent();
+  }
+
   // 上次背到哪一颂：在 engine.index 变化时记录，下次刷新自动恢复
   function saveLastPosition() {
     if (engine.mode === "sequence" && engine.queue.length > 0) {
@@ -642,8 +660,9 @@
     });
     box.querySelectorAll("[data-tid]").forEach(function (it) {
       it.addEventListener("click", function () {
+        jumpToVerse(it.dataset.tid);
         var el = document.getElementById("verse-" + it.dataset.tid);
-        if (view === "all" && el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); }
+        if (el && view === "all") flash(el);
       });
     });
   }
