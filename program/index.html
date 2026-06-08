@@ -552,26 +552,30 @@
     var oldId = engine.queue[engine.index];
     var newIdx = newQueue.indexOf(oldId);
     if (newIdx >= 0) {
+      // 当前颂仍在新列表里 → 平滑更新 queue/index，不打断播放
       engine.queue = newQueue;
       engine.index = newIdx;
       syncPlayingUI();
       return;
     }
-    // 当前颂被移除：从原队列里寻找下一个仍在新选择中的颂
-    var fallbackId = null;
-    for (var i = engine.index + 1; i < engine.queue.length; i++) {
-      if (newQueue.indexOf(engine.queue[i]) >= 0) { fallbackId = engine.queue[i]; break; }
+    // 当前颂被移除：按 globalNo 找新列表里"该插在哪个位置"，
+    // 然后将游标停在那个位置的前一颗（这样下次按 ▶/⏭ 行为可预期）。
+    // 重要：正在播也不强行 seek 到别处，避免给用户造成"莫名其妙跳回第一颗"的错觉。
+    var oldGno = (oldId && byId[oldId]) ? byId[oldId].globalNo : -1;
+    var insertPos = newQueue.length;
+    for (var j = 0; j < newQueue.length; j++) {
+      if (byId[newQueue[j]].globalNo > oldGno) { insertPos = j; break; }
     }
-    if (fallbackId === null) fallbackId = newQueue[0];
+    var wasPlaying = !!engine.timer;
     engine.queue = newQueue;
-    engine.index = newQueue.indexOf(fallbackId);
-    if (engine.timer) {
-      // 正在播 → 立即切到新当前颂
-      playCurrent();
-    } else {
-      // 暂停 / 未播 → 等用户续播；下一次 resume 会自动跳到新颂起点
-      syncPlayingUI();
+    engine.index = Math.max(0, insertPos - 1);  // 停在"刚刚被移除颂"的相邻位置
+    if (wasPlaying) {
+      // 把正在播的音频停掉，让 UI 状态切回"已暂停"。用户主动按 ▶ 才会续播。
+      if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+      audio.pause();
+      engine.paused = true;
     }
+    syncPlayingUI();
   }
   function updateBadges() {
     document.getElementById("tabBadge").textContent = selected.size;
