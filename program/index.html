@@ -70,6 +70,12 @@
     border-radius: 10px; font-size: 17px; color: var(--ink-soft);
   }
   .icon-btn:hover { background: var(--accent-bg); }
+  .hamburger { display: none; border: 1px solid var(--line); background: transparent;
+    width: 36px; height: 36px; border-radius: 8px; font-size: 18px; color: var(--ink);
+    align-items: center; justify-content: center; }
+  .drawer-mask { position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,.35); z-index: 40; display: none; }
+  .drawer-mask.open { display: block; }
 
   /* ---------- 三栏布局 ---------- */
   .layout { display: flex; height: calc(100% - 60px); }
@@ -190,10 +196,73 @@
   ::-webkit-scrollbar { width: 9px; }
   ::-webkit-scrollbar-thumb { background: #d8cfba; border-radius: 5px; }
   ::-webkit-scrollbar-thumb:hover { background: var(--accent-soft); }
+
+  /* ---------- 移动端（< 760px） ---------- */
+  @media (max-width: 760px) {
+    body { font-size: 15px; }
+    .topbar { height: 52px; padding: 0 10px; gap: 8px; }
+    .topbar .brand { font-size: 16px; letter-spacing: 0; }
+    .topbar .brand small { display: none; }
+    .tabs { margin-left: 0; gap: 6px; }
+    .tab { padding: 5px 12px; font-size: 13px; }
+    .hamburger { display: inline-flex; }
+
+    .layout { display: block; height: calc(100% - 52px); position: relative; }
+
+    /* 主区全宽，给底部播放器留位 */
+    .col-main {
+      height: 100%; padding: 12px 14px 110px; overflow-y: auto;
+    }
+
+    /* 左栏：从左侧滑出的抽屉 */
+    .col-left {
+      position: fixed; top: 52px; bottom: 0; left: 0;
+      width: 78%; max-width: 320px;
+      transform: translateX(-100%); transition: transform .2s ease;
+      z-index: 50; box-shadow: 4px 0 16px rgba(0,0,0,.12);
+    }
+    .col-left.open { transform: translateX(0); }
+
+    /* 右栏：底部常驻播放栏（隐藏标题与今日列表，只留 .player） */
+    .col-right {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      width: 100%; height: auto;
+      border-left: none; border-top: 1px solid var(--line);
+      z-index: 30;
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    .col-right .right-head, .col-right .today-list { display: none; }
+    .col-right .player { padding: 8px 14px 10px; border-top: none; }
+    .col-right .player .now-playing { font-size: 12px; margin-bottom: 6px; min-height: 16px; }
+    .col-right .player .controls { gap: 10px; }
+    .col-right .player .pbtn { width: 38px; height: 38px; font-size: 14px; }
+    .col-right .player .pbtn.main { width: 46px; height: 46px; font-size: 16px; }
+    .col-right .player .clear { font-size: 11px; margin-top: 4px; }
+
+    /* 颂卡片紧凑化：把"播放/循环"按钮放到一行 */
+    .verse { padding: 12px 14px; gap: 10px; flex-wrap: wrap; }
+    .verse .check { padding-top: 2px; }
+    .verse .check input { width: 20px; height: 20px; }
+    .verse .no-tag { width: 30px; font-size: 12px; }
+    .verse .lines { font-size: 17px; line-height: 1.85; letter-spacing: 0.5px; }
+    .verse .meta { font-size: 11px; }
+    .verse .ops {
+      flex-direction: row; flex-basis: 100%; justify-content: flex-end; gap: 6px;
+    }
+    .op-btn { padding: 5px 12px; font-size: 12px; }
+
+    /* 品标题 */
+    .pin-title { font-size: 19px; margin: 14px 0 10px; padding-bottom: 6px; }
+    .pin-title .sub { display: block; margin-left: 0; margin-top: 2px; font-size: 12px; }
+    .pin-title .pin-sel-btn { margin-left: 0; margin-top: 6px; }
+
+    .modal { width: 88%; max-width: 340px; }
+  }
 </style>
 </head>
 <body>
   <div class="topbar">
+    <button class="hamburger" id="btnMenu" title="目录">☰</button>
     <div class="brand">俱舍论本颂<small>背诵辅助</small></div>
     <div class="tabs">
       <button class="tab active" data-view="all">全部颂</button>
@@ -202,6 +271,7 @@
     <div class="spacer"></div>
     <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
   </div>
+  <div class="drawer-mask" id="drawerMask"></div>
 
   <div class="layout">
     <aside class="col-left" id="catalog"></aside>
@@ -330,6 +400,7 @@
         var pin = h.parentNode.dataset.pin;
         var el = document.getElementById("pintitle-" + pin);
         if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        closeMobileDrawer();
       });
     });
     cat.querySelectorAll(".pin-item").forEach(function (it) {
@@ -337,6 +408,7 @@
         if (view !== "all") { switchView("all"); }
         var el = document.getElementById("verse-" + it.dataset.goto);
         if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); }
+        closeMobileDrawer();
       });
     });
   }
@@ -786,6 +858,18 @@
   });
   document.getElementById("btnSettings").addEventListener("click", openSettings);
   document.getElementById("btnCloseSettings").addEventListener("click", closeSettings);
+
+  // 移动端：汉堡菜单 → 切换左侧目录抽屉
+  function openMobileDrawer() {
+    document.getElementById("catalog").classList.add("open");
+    document.getElementById("drawerMask").classList.add("open");
+  }
+  function closeMobileDrawer() {
+    document.getElementById("catalog").classList.remove("open");
+    document.getElementById("drawerMask").classList.remove("open");
+  }
+  document.getElementById("btnMenu").addEventListener("click", openMobileDrawer);
+  document.getElementById("drawerMask").addEventListener("click", closeMobileDrawer);
   document.getElementById("settingsMask").addEventListener("click", function (e) {
     if (e.target === this) closeSettings();
   });
