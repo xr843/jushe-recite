@@ -766,10 +766,14 @@
   }
   function seqStep(delta) {
     var wasPlaying = !!engine.timer;
+    var currentId = (engine.queue.length > 0) ? engine.queue[engine.index] : null;
     if (engine.mode !== "sequence") {
       var list = selectedOrdered(); if (!list.length) return;
       engine.mode = "sequence"; engine.queue = list.map(function (v) { return v.id; });
-      engine.index = 0; engine.looping = savedSeqLoop;
+      // 单颂播放/无引擎 切到连播：尽量保留当前那一颂在 queue 中的位置
+      var pos = currentId ? engine.queue.indexOf(currentId) : -1;
+      engine.index = (pos >= 0) ? pos : 0;
+      engine.looping = savedSeqLoop;
     }
     resetAllProgress();
     engine.index += delta;
