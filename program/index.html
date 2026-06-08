@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>俱舍论本颂 · 背诵辅助</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#8a6d3b">
+<meta name="description" content="按品浏览俱舍论本颂、按音频自动连播,辅助每日背诵">
+<!-- iOS PWA -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="俱舍论本颂">
+<link rel="apple-touch-icon" href="/icons/icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
 <style>
   :root {
     --bg: #f4f1ea;
@@ -799,6 +808,14 @@
   renderToday();
   updateBadges();
 })();
+</script>
+<script>
+  // 注册 service worker（仅 https/localhost 生效），失败不影响 app 正常使用
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+    });
+  }
 </script>
 </body>
 </html>
