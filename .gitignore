@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 备份与中间产物
+600颂-单品/原始备份/
+program/*.log
+program/*.out
+program/*.tmp.mp3
+
+# 系统
+.DS_Store
+Thumbs.db

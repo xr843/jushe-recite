@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>俱舍论本颂 · 背诵辅助</title>
+<style>
+  :root {
+    --bg: #f4f1ea;
+    --paper: #fffdf8;
+    --ink: #2b2620;
+    --ink-soft: #6b6357;
+    --line: #e3ddd0;
+    --accent: #8a6d3b;          /* 赭石 */
+    --accent-soft: #c9a96a;
+    --accent-bg: #f3ead6;
+    --playing: #fff6e0;
+    --playing-edge: #d9b066;
+    --shadow: 0 1px 3px rgba(60,50,30,.08), 0 4px 16px rgba(60,50,30,.05);
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Noto Serif SC", "Songti SC", "STSong", "SimSun", "PingFang SC", serif;
+    background: var(--bg);
+    color: var(--ink);
+    font-size: 16px;
+    line-height: 1.6;
+    overflow: hidden;
+  }
+  button { font-family: inherit; cursor: pointer; }
+
+  /* ---------- 顶栏 ---------- */
+  .topbar {
+    height: 60px;
+    display: flex; align-items: center; gap: 24px;
+    padding: 0 28px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    box-shadow: var(--shadow);
+    position: relative; z-index: 10;
+  }
+  .topbar .brand { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
+  .topbar .brand small { font-size: 13px; color: var(--ink-soft); font-weight: 400; margin-left: 8px; letter-spacing: 0; }
+  .tabs { display: flex; gap: 8px; margin-left: 12px; }
+  .tab {
+    border: 1px solid var(--line); background: transparent; color: var(--ink-soft);
+    padding: 7px 18px; border-radius: 20px; font-size: 14px; transition: .15s;
+  }
+  .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .tab .badge {
+    display: inline-block; min-width: 18px; height: 18px; line-height: 18px;
+    background: var(--accent-soft); color: #fff; border-radius: 9px; font-size: 12px;
+    text-align: center; padding: 0 5px; margin-left: 6px;
+  }
+  .tab.active .badge { background: rgba(255,255,255,.3); }
+  .topbar .spacer { flex: 1; }
+  .icon-btn {
+    border: 1px solid var(--line); background: transparent; width: 38px; height: 38px;
+    border-radius: 10px; font-size: 17px; color: var(--ink-soft);
+  }
+  .icon-btn:hover { background: var(--accent-bg); }
+
+  /* ---------- 三栏布局 ---------- */
+  .layout { display: flex; height: calc(100% - 60px); }
+  .col-left  { width: 240px; border-right: 1px solid var(--line); background: var(--paper); overflow-y: auto; flex-shrink: 0; }
+  .col-main  { flex: 1; overflow-y: auto; padding: 24px 28px 80px; }
+  .col-right { width: 300px; border-left: 1px solid var(--line); background: var(--paper); overflow-y: auto; flex-shrink: 0; display: flex; flex-direction: column; }
+
+  /* ---------- 左栏 品目录 ---------- */
+  .pin-group { border-bottom: 1px solid var(--line); }
+  .pin-head {
+    display: flex; align-items: center; gap: 8px; padding: 12px 18px;
+    font-weight: 600; user-select: none; cursor: pointer;
+  }
+  .pin-head:hover { background: var(--accent-bg); }
+  .pin-head .arrow { font-size: 11px; color: var(--accent); transition: transform .15s; width: 12px; }
+  .pin-group.open .pin-head .arrow { transform: rotate(90deg); }
+  .pin-head .count { margin-left: auto; font-size: 12px; color: var(--ink-soft); font-weight: 400; }
+  .pin-items { display: none; padding: 4px 0 10px; }
+  .pin-group.open .pin-items { display: block; }
+  .pin-item {
+    display: flex; gap: 10px; padding: 4px 18px 4px 38px; font-size: 13px;
+    color: var(--ink-soft); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .pin-item:hover { color: var(--accent); background: var(--accent-bg); }
+  .pin-item .no { color: var(--accent-soft); min-width: 22px; }
+
+  /* ---------- 主区 颂卡片 ---------- */
+  .pin-title {
+    font-size: 22px; font-weight: 700; color: var(--accent);
+    margin: 18px 0 14px; padding-bottom: 8px; border-bottom: 2px solid var(--accent-soft);
+    scroll-margin-top: 14px;
+  }
+  .pin-title:first-child { margin-top: 0; }
+  .pin-title .sub { font-size: 14px; color: var(--ink-soft); font-weight: 400; margin-left: 10px; }
+  .pin-title .pin-sel-btn {
+    margin-left: 14px; font-size: 13px; font-weight: 400; vertical-align: middle;
+    border: 1px solid var(--accent-soft); background: var(--paper); color: var(--accent);
+    padding: 4px 12px; border-radius: 6px; transition: .15s;
+  }
+  .pin-title .pin-sel-btn:hover { background: var(--accent-bg); }
+  .pin-title .pin-sel-btn.all { background: var(--accent-soft); color: #fff; border-color: var(--accent-soft); }
+
+  .verse {
+    background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
+    margin-bottom: 14px; padding: 16px 18px 14px; display: flex; gap: 14px;
+    box-shadow: var(--shadow); transition: .18s; position: relative; overflow: hidden;
+    scroll-margin-top: 14px;
+  }
+  .verse.playing { background: var(--playing); border-color: var(--playing-edge); box-shadow: 0 0 0 2px var(--playing-edge), var(--shadow); }
+  .verse .check { padding-top: 4px; }
+  .verse .check input { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+  .verse .no-tag {
+    flex-shrink: 0; width: 40px; text-align: center; padding-top: 2px;
+    font-size: 13px; color: var(--accent); font-weight: 600;
+  }
+  .verse .no-tag .g { display: block; font-size: 11px; color: var(--ink-soft); font-weight: 400; margin-top: 2px; }
+  .verse .body { flex: 1; }
+  .verse .lines { font-size: 20px; line-height: 2.0; letter-spacing: 1px; }
+  .verse .lines .ln { display: block; }
+  .verse .meta { font-size: 12px; color: var(--ink-soft); margin-top: 6px; }
+  .verse .ops { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex-shrink: 0; }
+  .op-btn {
+    border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+    padding: 6px 14px; border-radius: 8px; font-size: 13px; white-space: nowrap; transition: .15s;
+  }
+  .op-btn:hover { background: var(--accent-bg); border-color: var(--accent-soft); }
+  .op-btn.play.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .op-btn.loop.active { background: var(--accent-soft); color: #fff; border-color: var(--accent-soft); }
+  /* 进度条 */
+  .verse .progress {
+    position: absolute; left: 0; bottom: 0; height: 3px; width: 0%;
+    background: var(--playing-edge); transition: width .1s linear;
+  }
+
+  .empty-hint { color: var(--ink-soft); text-align: center; padding: 60px 20px; font-size: 15px; }
+
+  /* ---------- 右栏 今日背诵 ---------- */
+  .right-head { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+  .right-head h3 { font-size: 16px; }
+  .right-head .sel-count { font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
+  .today-list { flex: 1; overflow-y: auto; padding: 8px 0; }
+  .today-item {
+    display: flex; align-items: center; gap: 8px; padding: 8px 18px; font-size: 14px; cursor: pointer;
+    border-left: 3px solid transparent;
+  }
+  .today-item:hover { background: var(--accent-bg); }
+  .today-item.current { background: var(--playing); border-left-color: var(--playing-edge); font-weight: 600; }
+  .today-item .seq { color: var(--accent-soft); min-width: 18px; font-size: 13px; }
+  .today-item .label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .today-item .rm { color: var(--ink-soft); border: none; background: none; font-size: 16px; padding: 0 4px; }
+  .today-item .rm:hover { color: #b5462f; }
+  .today-empty { color: var(--ink-soft); text-align: center; padding: 40px 16px; font-size: 14px; line-height: 1.8; }
+
+  .player {
+    border-top: 1px solid var(--line); padding: 14px 18px; background: var(--accent-bg);
+  }
+  .player .now-playing { font-size: 13px; color: var(--ink-soft); margin-bottom: 10px; min-height: 20px; text-align: center; }
+  .player .now-playing b { color: var(--accent); }
+  .player .controls { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .player .pbtn {
+    border: 1px solid var(--accent-soft); background: var(--paper); color: var(--accent);
+    width: 42px; height: 42px; border-radius: 50%; font-size: 16px; display: flex; align-items: center; justify-content: center;
+  }
+  .player .pbtn.main { width: 52px; height: 52px; font-size: 20px; background: var(--accent); color: #fff; border-color: var(--accent); }
+  .player .pbtn:hover { transform: scale(1.05); }
+  .player .pbtn.loop.active { background: var(--accent-soft); color: #fff; border-color: var(--accent-soft); }
+  .player .clear { display: block; margin: 12px auto 0; font-size: 12px; color: var(--ink-soft); background: none; border: none; text-decoration: underline; }
+
+  /* ---------- 设置弹层 ---------- */
+  .modal-mask { position: fixed; inset: 0; background: rgba(40,34,26,.4); display: none; align-items: center; justify-content: center; z-index: 100; }
+  .modal-mask.open { display: flex; }
+  .modal { background: var(--paper); border-radius: var(--radius); padding: 24px 28px; width: 340px; box-shadow: var(--shadow); }
+  .modal h3 { margin-bottom: 16px; }
+  .modal .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; font-size: 14px; }
+  .modal input[type=range] { width: 150px; accent-color: var(--accent); }
+  .modal .close { display: block; margin: 18px auto 0; background: var(--accent); color: #fff; border: none; padding: 8px 30px; border-radius: 8px; }
+
+  ::-webkit-scrollbar { width: 9px; }
+  ::-webkit-scrollbar-thumb { background: #d8cfba; border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--accent-soft); }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">俱舍论本颂<small>背诵辅助</small></div>
+    <div class="tabs">
+      <button class="tab active" data-view="all">全部颂</button>
+      <button class="tab" data-view="today">今日背诵<span class="badge" id="tabBadge">0</span></button>
+    </div>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
+  </div>
+
+  <div class="layout">
+    <aside class="col-left" id="catalog"></aside>
+    <main class="col-main" id="mainList"></main>
+    <aside class="col-right">
+      <div class="right-head">
+        <h3>今日背诵</h3>
+        <div class="sel-count" id="selCount">已选 0 颂</div>
+      </div>
+      <div class="today-list" id="todayList"></div>
+      <div class="player">
+        <div class="now-playing" id="nowPlaying">未开始</div>
+        <div class="controls">
+          <button class="pbtn" id="btnPrev" title="上一颂">⏮</button>
+          <button class="pbtn main" id="btnSeqPlay" title="连播/暂停">▶</button>
+          <button class="pbtn" id="btnNext" title="下一颂">⏭</button>
+          <button class="pbtn loop" id="btnSeqLoop" title="列表循环">🔁</button>
+        </div>
+        <button class="clear" id="btnClear">清空列表</button>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 设置 -->
+  <div class="modal-mask" id="settingsMask">
+    <div class="modal">
+      <h3>设置</h3>
+      <div class="row">
+        <span>播放速度</span>
+        <span><input type="range" id="rateRange" min="0.5" max="1.5" step="0.05"> <b id="rateVal">1</b> ×</span>
+      </div>
+      <div class="row">
+        <span>音量</span>
+        <span><input type="range" id="volRange" min="0" max="1" step="0.05"> <b id="volVal">100</b> %</span>
+      </div>
+      <button class="close" id="btnCloseSettings">完成</button>
+    </div>
+  </div>
+
+<audio id="audio" preload="auto"></audio>
+
+<script src="verses.js"></script>
+<script src="timings.js"></script>
+<script>
+(function () {
+  "use strict";
+  if (typeof VERSES === "undefined") {
+    document.getElementById("mainList").innerHTML =
+      '<div class="empty-hint">未找到 verses.js 数据文件。<br>请先在 program/ 目录运行：python3 extract_verses.py</div>';
+    return;
+  }
+
+  // ---------- 状态 ----------
+  var LS_SEL = "kusha_selected_v1";
+  var LS_RATE = "kusha_rate_v1";
+  var LS_VOL = "kusha_vol_v1";
+  var selected = loadSelected();          // Set of verse id（今日背诵）
+  var rate = parseFloat(localStorage.getItem(LS_RATE) || "1");
+  var vol = parseFloat(localStorage.getItem(LS_VOL) || "1");
+  if (!isFinite(vol)) vol = 1;
+  vol = Math.min(Math.max(vol, 0), 1);
+  var view = "all";
+
+  function applyVol() { audio.volume = vol; }
+
+  var TIMINGS = window.TIMINGS || {};     // {id: {file, start, end}}，强制对齐结果
+  var audio = document.getElementById("audio");
+  var AUDIO_BASE = "../600颂-单品/";
+
+  // 播放引擎状态（真实音频）
+  var engine = {
+    mode: null,        // 'single' | 'sequence'
+    queue: [],         // verse id 数组
+    index: 0,          // 当前播放在 queue 中的位置
+    looping: false,    // single: 单曲循环；sequence: 列表循环
+    paused: false,     // sequence 暂停态（保留 queue/index，下次续播）
+    curFile: null,     // 当前已载入 audio 的 mp3 文件名
+    timer: null        // 进度/结束轮询 interval（truthy 即表示正在播放）
+  };
+
+  var byId = {};
+  VERSES.forEach(function (v) { byId[v.id] = v; });
+
+  // ---------- 工具 ----------
+  function loadSelected() {
+    try { return new Set(JSON.parse(localStorage.getItem(LS_SEL) || "[]")); }
+    catch (e) { return new Set(); }
+  }
+  function saveSelected() { localStorage.setItem(LS_SEL, JSON.stringify(Array.from(selected))); }
+  function selectedOrdered() {
+    // 按 globalNo 排序的已选颂
+    return VERSES.filter(function (v) { return selected.has(v.id); })
+                 .sort(function (a, b) { return a.globalNo - b.globalNo; });
+  }
+  function pinLabel(v) { return v.pin.replace("品", "").replace("分", "") + v.localNo; }
+  function fmt(sec) { var m = Math.floor(sec / 60), s = Math.floor(sec % 60); return m + ":" + (s < 10 ? "0" : "") + s; }
+
+  // ---------- 渲染：左栏目录 ----------
+  function renderCatalog() {
+    var groups = {};
+    var order = [];
+    VERSES.forEach(function (v) {
+      if (!groups[v.pin]) { groups[v.pin] = []; order.push(v.pin); }
+      groups[v.pin].push(v);
+    });
+    var html = "";
+    order.forEach(function (pin, gi) {
+      var items = groups[pin];
+      var open = gi === 0 ? "open" : "";
+      html += '<div class="pin-group ' + open + '" data-pin="' + pin + '">';
+      html += '  <div class="pin-head"><span class="arrow">▶</span>' + pin +
+              '<span class="count">' + items.length + '</span></div>';
+      html += '  <div class="pin-items">';
+      items.forEach(function (v) {
+        html += '<div class="pin-item" data-goto="' + v.id + '"><span class="no">' + v.localNo + '</span>' +
+                '<span>' + v.lines[0] + '…</span></div>';
+      });
+      html += '  </div></div>';
+    });
+    var cat = document.getElementById("catalog");
+    cat.innerHTML = html;
+    cat.querySelectorAll(".pin-head").forEach(function (h) {
+      h.addEventListener("click", function () {
+        h.parentNode.classList.toggle("open");
+        if (view !== "all") switchView("all");
+        var pin = h.parentNode.dataset.pin;
+        var el = document.getElementById("pintitle-" + pin);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+    cat.querySelectorAll(".pin-item").forEach(function (it) {
+      it.addEventListener("click", function () {
+        if (view !== "all") { switchView("all"); }
+        var el = document.getElementById("verse-" + it.dataset.goto);
+        if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); }
+      });
+    });
+  }
+  function flash(el) {
+    el.style.transition = "box-shadow .2s"; el.style.boxShadow = "0 0 0 3px var(--accent-soft)";
+    setTimeout(function () { el.style.boxShadow = ""; }, 700);
+  }
+
+  // ---------- 渲染：主区颂列表 ----------
+  function renderMain() {
+    var list = view === "all" ? VERSES : selectedOrdered();
+    var main = document.getElementById("mainList");
+    if (view === "today" && list.length === 0) {
+      main.innerHTML = '<div class="empty-hint">今日背诵列表为空。<br>切到「全部颂」勾选你今天要背的偈颂吧。</div>';
+      return;
+    }
+    var html = "";
+    var lastPin = null;
+    list.forEach(function (v) {
+      if (v.pin !== lastPin) {
+        lastPin = v.pin;
+        var meta = pinMeta(v.pin);
+        var selBtn = (view === "all")
+          ? '<button class="pin-sel-btn' + (allPinSelected(v.pin) ? ' all' : '') +
+            '" data-pin-sel="' + v.pin + '">' + pinSelBtnLabel(v.pin) + '</button>'
+          : '';
+        html += '<div class="pin-title" id="pintitle-' + v.pin + '">' + v.pin +
+                (meta ? '<span class="sub">' + meta + '</span>' : '') + selBtn + '</div>';
+      }
+      html += verseCard(v);
+    });
+    main.innerHTML = html;
+    bindCards(main);
+    syncPlayingUI();
+  }
+  function pinMeta(pin) {
+    if (pin === "序分") return "敬礼偈";
+    for (var i = 0; i < PIN_LIST.length; i++) if (PIN_LIST[i].name === pin)
+      return "共 " + PIN_LIST[i].count + " 颂 · 🎵 " + PIN_LIST[i].audio;
+    return "";
+  }
+  function verseCard(v) {
+    var checked = selected.has(v.id) ? "checked" : "";
+    var noTag = v.localNo + '<span class="g">#' + v.globalNo + '</span>';
+    var lines = v.lines.map(function (ln, i) {
+      var punc = (i === v.lines.length - 1) ? "。" : "，";
+      return '<span class="ln">' + ln + punc + '</span>';
+    }).join("");
+    var t = TIMINGS[v.id];
+    var audioNote = t
+      ? ('🎵 ' + fmt(t.start) + ' – ' + fmt(t.end) + ' · ' + (v.audioFile || '1.界品.mp3'))
+      : '⏳ 音频待对齐';
+    return '' +
+      '<div class="verse" id="verse-' + v.id + '" data-id="' + v.id + '">' +
+        '<div class="check"><input type="checkbox" data-check="' + v.id + '" ' + checked + '></div>' +
+        '<div class="no-tag">' + noTag + '</div>' +
+        '<div class="body">' +
+          '<div class="lines">' + lines + '</div>' +
+          '<div class="meta">' + audioNote + '</div>' +
+        '</div>' +
+        '<div class="ops">' +
+          '<button class="op-btn play" data-play="' + v.id + '">▶ 播放</button>' +
+          '<button class="op-btn loop" data-loop="' + v.id + '">🔁 循环</button>' +
+        '</div>' +
+        '<div class="progress" data-prog="' + v.id + '"></div>' +
+      '</div>';
+  }
+  function bindCards(root) {
+    root.querySelectorAll("[data-check]").forEach(function (cb) {
+      cb.addEventListener("change", function () { toggleSelect(cb.dataset.check, cb.checked); });
+    });
+    root.querySelectorAll("[data-play]").forEach(function (b) {
+      b.addEventListener("click", function () { onSinglePlay(b.dataset.play); });
+    });
+    root.querySelectorAll("[data-loop]").forEach(function (b) {
+      b.addEventListener("click", function () { onSingleLoopToggle(b.dataset.loop); });
+    });
+    root.querySelectorAll("[data-pin-sel]").forEach(function (b) {
+      b.addEventListener("click", function () { togglePinSelect(b.dataset.pinSel); });
+    });
+  }
+
+  // 本品全选 / 取消本品
+  function versesInPin(pin) {
+    return VERSES.filter(function (v) { return v.pin === pin; });
+  }
+  function allPinSelected(pin) {
+    var vs = versesInPin(pin);
+    if (!vs.length) return false;
+    return vs.every(function (v) { return selected.has(v.id); });
+  }
+  function pinSelBtnLabel(pin) {
+    return allPinSelected(pin) ? "☑ 取消本品" : "☐ 只背本品";
+  }
+  function refreshPinSelButtons() {
+    document.querySelectorAll("[data-pin-sel]").forEach(function (b) {
+      var p = b.dataset.pinSel;
+      var all = allPinSelected(p);
+      b.textContent = pinSelBtnLabel(p);
+      b.classList.toggle("all", all);
+    });
+  }
+  function togglePinSelect(pin) {
+    var vs = versesInPin(pin);
+    var allSel = allPinSelected(pin);
+    if (allSel) {
+      // 取消本品：只移除本品的勾选，保留其他品
+      vs.forEach(function (v) { selected.delete(v.id); });
+    } else {
+      // 只背本品：清空所有勾选，再勾本品全部（语义=替换）
+      selected.clear();
+      stopEngine();
+      vs.forEach(function (v) { selected.add(v.id); });
+    }
+    saveSelected();
+    // 全量同步 checkbox（因为可能清掉了其他品）
+    document.querySelectorAll("[data-check]").forEach(function (cb) {
+      cb.checked = selected.has(cb.dataset.check);
+    });
+    refreshPinSelButtons();
+    renderToday();
+    updateBadges();
+    if (view === "today") renderMain();
+    syncQueueToSelection();
+  }
+
+  // ---------- 今日背诵选择 ----------
+  function toggleSelect(id, on) {
+    if (on) selected.add(id); else selected.delete(id);
+    saveSelected(); renderToday(); updateBadges();
+    if (view === "today") renderMain();
+    else refreshPinSelButtons();
+    syncQueueToSelection();
+  }
+
+  // 选择变化时把 engine.queue 同步到当前 selectedOrdered()，
+  // 让正在播 / 已暂停的连播立刻看到新列表（数量、顺序、剔除）。
+  function syncQueueToSelection() {
+    if (engine.mode !== "sequence") return;
+    var newQueue = selectedOrdered().map(function (v) { return v.id; });
+    if (newQueue.length === 0) { stopEngine(); return; }
+    var oldId = engine.queue[engine.index];
+    var newIdx = newQueue.indexOf(oldId);
+    if (newIdx >= 0) {
+      engine.queue = newQueue;
+      engine.index = newIdx;
+      syncPlayingUI();
+      return;
+    }
+    // 当前颂被移除：从原队列里寻找下一个仍在新选择中的颂
+    var fallbackId = null;
+    for (var i = engine.index + 1; i < engine.queue.length; i++) {
+      if (newQueue.indexOf(engine.queue[i]) >= 0) { fallbackId = engine.queue[i]; break; }
+    }
+    if (fallbackId === null) fallbackId = newQueue[0];
+    engine.queue = newQueue;
+    engine.index = newQueue.indexOf(fallbackId);
+    if (engine.timer) {
+      // 正在播 → 立即切到新当前颂
+      playCurrent();
+    } else {
+      // 暂停 / 未播 → 等用户续播；下一次 resume 会自动跳到新颂起点
+      syncPlayingUI();
+    }
+  }
+  function updateBadges() {
+    document.getElementById("tabBadge").textContent = selected.size;
+    document.getElementById("selCount").textContent = "已选 " + selected.size + " 颂";
+  }
+  function renderToday() {
+    var list = selectedOrdered();
+    var box = document.getElementById("todayList");
+    if (list.length === 0) {
+      box.innerHTML = '<div class="today-empty">还没有选颂。<br>在「全部颂」里勾选<br>今天要背的偈颂。</div>';
+      return;
+    }
+    var html = "";
+    list.forEach(function (v, i) {
+      var cur = (engine.mode === "sequence" && engine.queue[engine.index] === v.id) ? "current" : "";
+      html += '<div class="today-item ' + cur + '" data-tid="' + v.id + '">' +
+                '<span class="seq">' + (i + 1) + '</span>' +
+                '<span class="label">' + pinLabel(v) + '　' + v.lines[0] + '…</span>' +
+                '<button class="rm" data-rm="' + v.id + '" title="移除">×</button>' +
+              '</div>';
+    });
+    box.innerHTML = html;
+    box.querySelectorAll("[data-rm]").forEach(function (b) {
+      b.addEventListener("click", function (e) { e.stopPropagation(); toggleSelect(b.dataset.rm, false);
+        var cb = document.querySelector('[data-check="' + b.dataset.rm + '"]'); if (cb) cb.checked = false; });
+    });
+    box.querySelectorAll("[data-tid]").forEach(function (it) {
+      it.addEventListener("click", function () {
+        var el = document.getElementById("verse-" + it.dataset.tid);
+        if (view === "all" && el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); }
+      });
+    });
+  }
+
+  // ---------- 播放引擎（真实音频） ----------
+  // 每颂的 [start,end] 来自 TIMINGS；同一品的颂共用一个 mp3，连播跨品时换文件。
+  function hasTiming(id) { return !!TIMINGS[id]; }
+
+  function stopEngine() {
+    if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+    audio.pause();
+    engine.mode = null; engine.queue = []; engine.index = 0; engine.paused = false;
+    resetAllProgress(); syncPlayingUI();
+  }
+  // 暂停连播：保留 mode/queue/index，方便续播
+  function pauseSequence() {
+    if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+    audio.pause();
+    engine.paused = true;
+    syncPlayingUI();
+  }
+  // 续播：尽量从暂停的位置继续；若 prev/next 已切到别处则跳到该颂起点
+  function resumeSequence() {
+    if (engine.mode !== "sequence" || engine.queue.length === 0) { engine.paused = false; return; }
+    var id = engine.queue[engine.index];
+    var t = TIMINGS[id];
+    if (!t) { engine.paused = false; advanceSeq(); return; }
+    var ct = audio.currentTime;
+    engine.paused = false;
+    if (engine.curFile !== t.file || ct < t.start || ct >= t.end) {
+      playCurrent();   // 跨文件 / 跨颂 / 已结束 → 从该颂起点开始
+      return;
+    }
+    audio.playbackRate = rate;
+    audio.play().catch(function () {});
+    startTimer();
+    syncPlayingUI();
+  }
+  function resetAllProgress() {
+    document.querySelectorAll("[data-prog]").forEach(function (p) { p.style.width = "0%"; });
+  }
+
+  // 载入并从该颂起点开始播放当前 queue[index]
+  function playCurrent() {
+    var id = engine.queue[engine.index];
+    var t = TIMINGS[id];
+    if (!t) {                                   // 该颂还没对齐时间戳
+      pulse(document.getElementById("nowPlaying"), "该颂尚无音频时间点");
+      if (engine.mode === "sequence") { advanceSeq(); return; }
+      stopEngine(); return;
+    }
+    var doPlay = function () {
+      applyVol();
+      audio.currentTime = t.start;
+      audio.playbackRate = rate;
+      audio.play().catch(function () {});
+    };
+    if (engine.curFile !== t.file) {            // 需要切换 mp3
+      engine.curFile = t.file;
+      audio.src = AUDIO_BASE + encodeURIComponent(t.file);
+      audio.addEventListener("loadedmetadata", doPlay, { once: true });
+      audio.load();
+    } else {
+      doPlay();
+    }
+    startTimer();
+    syncPlayingUI();
+  }
+
+  // 进度 + 到达本颂 end 的检测（timeupdate 粒度太粗，用 100ms 轮询）
+  function tick() {
+    var id = engine.queue[engine.index];
+    var t = TIMINGS[id];
+    if (!t) return;
+    var prog = document.querySelector('[data-prog="' + id + '"]');
+    var span = Math.max(t.end - t.start, 0.01);
+    var ratio = Math.min(Math.max((audio.currentTime - t.start) / span, 0), 1);
+    if (prog) prog.style.width = (ratio * 100) + "%";
+    if (audio.currentTime >= t.end - 0.02) onVerseEnd();
+  }
+  function onVerseEnd() {
+    var id = engine.queue[engine.index];
+    var prog = document.querySelector('[data-prog="' + id + '"]');
+    if (engine.mode === "single") {
+      if (engine.looping) { if (prog) prog.style.width = "0%"; audio.currentTime = TIMINGS[id].start; }
+      else { stopEngine(); }
+    } else { // sequence
+      if (prog) prog.style.width = "0%";
+      advanceSeq();
+    }
+  }
+  // 连播推进到下一颂（到末尾按是否循环决定回头或停止）
+  function advanceSeq() {
+    var prevId = engine.queue[engine.index];
+    var prevT = TIMINGS[prevId];
+    if (engine.index < engine.queue.length - 1) { engine.index++; }
+    else if (engine.looping) { engine.index = 0; }
+    else { stopEngine(); return; }
+    var nextId = engine.queue[engine.index];
+    var nextT = TIMINGS[nextId];
+    syncPlayingUI(); renderToday(); scrollToCurrent();
+
+    // 衔接优化：同一 mp3、时间近似连续、音频仍在播 → 不 seek 不 reload，
+    // 让音频自然过渡，避免 seek 引起的瞬时缓冲卡顿。
+    if (prevT && nextT && nextT.file === prevT.file &&
+        engine.curFile === nextT.file &&
+        Math.abs(nextT.start - prevT.end) < 0.15 &&
+        !audio.paused && !audio.ended) {
+      return;
+    }
+    playCurrent();
+  }
+  function startTimer() {
+    if (engine.timer) clearInterval(engine.timer);
+    engine.timer = setInterval(tick, 100);
+  }
+
+  // 单颂播放
+  function onSinglePlay(id) {
+    var alreadyPlayingThis = engine.mode === "single" && engine.queue[0] === id && engine.timer;
+    var keepLoop = (engine.mode === "single" && engine.queue[0] === id) ? engine.looping : false;
+    stopEngine();
+    if (alreadyPlayingThis) { return; }   // 再次点击=停止
+    engine.mode = "single"; engine.queue = [id]; engine.index = 0;
+    engine.looping = keepLoop;
+    playCurrent();
+  }
+  function onSingleLoopToggle(id) {
+    if (engine.mode === "single" && engine.queue[0] === id) {
+      engine.looping = !engine.looping;
+      syncPlayingUI();
+    } else {
+      // 未在播放该颂：直接以循环模式开始播放
+      stopEngine();
+      engine.mode = "single"; engine.queue = [id]; engine.index = 0;
+      engine.looping = true;
+      playCurrent();
+    }
+  }
+
+  // 今日连播
+  function onSeqPlay() {
+    // 正在播 → 暂停（保留位置）
+    if (engine.mode === "sequence" && engine.timer) { pauseSequence(); return; }
+    // 已暂停 → 续播
+    if (engine.mode === "sequence" && engine.paused) { resumeSequence(); return; }
+    // 否则：开始新一轮连播
+    var list = selectedOrdered();
+    if (list.length === 0) { pulse(document.getElementById("nowPlaying"), "请先勾选要背的颂"); return; }
+    stopEngine();
+    engine.mode = "sequence"; engine.queue = list.map(function (v) { return v.id; });
+    engine.index = 0;
+    engine.looping = savedSeqLoop || false;
+    renderToday(); scrollToCurrent();
+    playCurrent();
+  }
+  var savedSeqLoop = false;
+  function onSeqLoopToggle() {
+    savedSeqLoop = !savedSeqLoop;
+    if (engine.mode === "sequence") engine.looping = savedSeqLoop;
+    syncPlayingUI();
+  }
+  function seqStep(delta) {
+    var wasPlaying = !!engine.timer;
+    if (engine.mode !== "sequence") {
+      var list = selectedOrdered(); if (!list.length) return;
+      engine.mode = "sequence"; engine.queue = list.map(function (v) { return v.id; });
+      engine.index = 0; engine.looping = savedSeqLoop;
+    }
+    resetAllProgress();
+    engine.index += delta;
+    if (engine.index < 0) engine.index = engine.looping ? engine.queue.length - 1 : 0;
+    if (engine.index >= engine.queue.length) engine.index = engine.looping ? 0 : engine.queue.length - 1;
+    renderToday(); scrollToCurrent();
+    if (wasPlaying) { playCurrent(); }   // 若在播放，跳到目标颂继续播
+    else { syncPlayingUI(); }
+  }
+  function scrollToCurrent() {
+    if (engine.mode !== "sequence") return;
+    var el = document.getElementById("verse-" + engine.queue[engine.index]);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function pulse(el, msg) {
+    var old = el.textContent; el.innerHTML = msg;
+    setTimeout(function () { syncPlayingUI(); }, 1500);
+  }
+
+  // ---------- 同步播放态到 UI ----------
+  function syncPlayingUI() {
+    // 卡片高亮 + 按钮态
+    document.querySelectorAll(".verse").forEach(function (card) {
+      var id = card.dataset.id;
+      var isCur = engine.timer && engine.queue[engine.index] === id;
+      card.classList.toggle("playing", !!isCur);
+      var pb = card.querySelector("[data-play]");
+      var lb = card.querySelector("[data-loop]");
+      var playingThisSingle = engine.mode === "single" && engine.queue[0] === id && engine.timer;
+      if (pb) { pb.classList.toggle("active", !!playingThisSingle); pb.textContent = playingThisSingle ? "⏸ 停止" : "▶ 播放"; }
+      if (lb) { lb.classList.toggle("active", engine.mode === "single" && engine.queue[0] === id && engine.looping); }
+      if (!isCur) { var p = card.querySelector("[data-prog]"); if (p && engine.queue[engine.index] !== id) p.style.width = "0%"; }
+    });
+    // 连播按钮
+    var seqBtn = document.getElementById("btnSeqPlay");
+    var playingSeq = engine.mode === "sequence" && engine.timer;
+    seqBtn.textContent = playingSeq ? "⏸" : "▶";
+    seqBtn.classList.toggle("active", playingSeq);
+    document.getElementById("btnSeqLoop").classList.toggle("active", savedSeqLoop || (engine.mode === "sequence" && engine.looping));
+    // 当前播放提示
+    var np = document.getElementById("nowPlaying");
+    if (engine.mode === "sequence" && engine.queue.length) {
+      var v = byId[engine.queue[engine.index]];
+      var prefix = engine.paused ? '已暂停　' : '正在连播　';
+      np.innerHTML = prefix + '<b>' + (engine.index + 1) + ' / ' + engine.queue.length + '</b>　' + pinLabel(v);
+    } else if (engine.mode === "single" && engine.timer) {
+      var sv = byId[engine.queue[0]];
+      np.innerHTML = '单颂' + (engine.looping ? '循环' : '播放') + '　<b>' + pinLabel(sv) + '</b>';
+    } else {
+      np.textContent = "未开始";
+    }
+  }
+
+  // ---------- 视图切换 ----------
+  function switchView(v) {
+    view = v;
+    document.querySelectorAll(".tab").forEach(function (t) { t.classList.toggle("active", t.dataset.view === v); });
+    renderMain();
+  }
+
+  // ---------- 设置 ----------
+  function openSettings() {
+    document.getElementById("rateRange").value = rate;
+    document.getElementById("rateVal").textContent = rate;
+    document.getElementById("volRange").value = vol;
+    document.getElementById("volVal").textContent = Math.round(vol * 100);
+    document.getElementById("settingsMask").classList.add("open");
+  }
+  function closeSettings() { document.getElementById("settingsMask").classList.remove("open"); }
+
+  // ---------- 事件绑定 ----------
+  document.querySelectorAll(".tab").forEach(function (t) {
+    t.addEventListener("click", function () { switchView(t.dataset.view); });
+  });
+  document.getElementById("btnSeqPlay").addEventListener("click", onSeqPlay);
+  document.getElementById("btnSeqLoop").addEventListener("click", onSeqLoopToggle);
+  document.getElementById("btnPrev").addEventListener("click", function () { seqStep(-1); });
+  document.getElementById("btnNext").addEventListener("click", function () { seqStep(1); });
+  document.getElementById("btnClear").addEventListener("click", function () {
+    if (!selected.size) return;
+    selected.clear(); saveSelected(); stopEngine(); renderToday(); updateBadges();
+    document.querySelectorAll("[data-check]").forEach(function (cb) { cb.checked = false; });
+    if (view === "today") renderMain();
+    else refreshPinSelButtons();
+  });
+  document.getElementById("btnSettings").addEventListener("click", openSettings);
+  document.getElementById("btnCloseSettings").addEventListener("click", closeSettings);
+  document.getElementById("settingsMask").addEventListener("click", function (e) {
+    if (e.target === this) closeSettings();
+  });
+  document.getElementById("rateRange").addEventListener("input", function () {
+    rate = parseFloat(this.value);
+    document.getElementById("rateVal").textContent = rate;
+    localStorage.setItem(LS_RATE, rate);
+    audio.playbackRate = rate;
+  });
+  document.getElementById("volRange").addEventListener("input", function () {
+    vol = parseFloat(this.value);
+    document.getElementById("volVal").textContent = Math.round(vol * 100);
+    localStorage.setItem(LS_VOL, vol);
+    applyVol();
+  });
+
+  // ---------- 初始化 ----------
+  renderCatalog();
+  renderMain();
+  renderToday();
+  updateBadges();
+})();
+</script>
+</body>
+</html>
