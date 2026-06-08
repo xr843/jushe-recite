@@ -948,11 +948,17 @@
 })();
 </script>
 <script>
-  // 注册 service worker（仅 https/localhost 生效），失败不影响 app 正常使用
+  // 不再注册 service worker。如果浏览器之前装过旧 SW，下面这段会主动注销它，
+  // 顺便清空所有 Cache Storage，避免老缓存把页面卡在过时版本/半残状态。
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', function () {
-      navigator.serviceWorker.register('/sw.js').catch(function () {});
-    });
+    navigator.serviceWorker.getRegistrations().then(function (regs) {
+      regs.forEach(function (reg) { reg.unregister().catch(function () {}); });
+    }).catch(function () {});
+    if (window.caches) {
+      caches.keys().then(function (keys) {
+        keys.forEach(function (k) { caches.delete(k).catch(function () {}); });
+      }).catch(function () {});
+    }
   }
 </script>
 </body>
