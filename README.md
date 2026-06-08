@@ -1,8 +1,8 @@
-# 俱舍论本颂背诵辅助 / Kusha Chant Helper
+# 俱舍论本颂背诵辅助 / Jushe Recite
 
 按品浏览俱舍论本颂，勾选今日要背的颂，配合念诵音频自动连播。纯静态 HTML/JS，无构建步骤。
 
-A web app for memorizing 俱舍论 (Abhidharmakośa) root verses with synchronized chant audio. Pure static HTML/JS — no build step.
+A web app for reciting and memorizing 俱舍论 (Abhidharmakośa) root verses with synchronized audio. Pure static HTML/JS — no build step.
 
 ## 功能 / Features
 
