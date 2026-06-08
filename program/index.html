@@ -315,7 +315,7 @@
         <span><input type="range" id="volRange" min="0" max="1" step="0.05"> <b id="volVal">100</b> %</span>
       </div>
       <div style="font-size:11px;color:var(--ink-soft);text-align:center;margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">
-        版本 <code id="appVersion" style="font-family:monospace">2026-06-08-r8</code>
+        版本 <code id="appVersion" style="font-family:monospace">2026-06-08-r9</code>
       </div>
       <button class="close" id="btnCloseSettings">完成</button>
     </div>
@@ -835,8 +835,19 @@
   }
   function scrollToCurrent() {
     if (engine.mode !== "sequence") return;
-    var el = document.getElementById("verse-" + engine.queue[engine.index]);
+    var id = engine.queue[engine.index];
+    // 主区(中间正文)滚到当前颂
+    var el = document.getElementById("verse-" + id);
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // 右栏「今日背诵」列表也跟随
+    var todayEl = document.querySelector('[data-tid="' + id + '"]');
+    var container = document.getElementById("todayList");
+    if (todayEl && container) {
+      var rect = todayEl.getBoundingClientRect();
+      var contRect = container.getBoundingClientRect();
+      var target = container.scrollTop + (rect.top - contRect.top) - (container.clientHeight - rect.height) / 2;
+      container.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+    }
   }
   function pulse(el, msg) {
     var old = el.textContent; el.innerHTML = msg;
