@@ -675,6 +675,7 @@
 
   function stopEngine() {
     if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+    engine.seekToken = (engine.seekToken || 0) + 1;   // 作废任何在途的 seekThenPlay，别在停止后又出声
     audio.pause();
     engine.mode = null; engine.queue = []; engine.index = 0; engine.paused = false;
     resetAllProgress(); syncPlayingUI();
@@ -682,6 +683,7 @@
   // 暂停连播：保留 mode/queue/index，方便续播
   function pauseSequence() {
     if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+    engine.seekToken = (engine.seekToken || 0) + 1;   // 同上：暂停后不应被在途 seek 重新唤醒
     audio.pause();
     engine.paused = true;
     syncPlayingUI();
@@ -719,9 +721,8 @@
     }
     var doPlay = function () {
       applyVol();
-      audio.currentTime = t.start;
       audio.playbackRate = rate;
-      audio.play().catch(function () {});
+      seekThenPlay(t.start);                     // 先把光标确实定到本颂起点，再出声
     };
     if (engine.curFile !== t.file) {            // 需要切换 mp3
       engine.curFile = t.file;
@@ -735,11 +736,47 @@
     syncPlayingUI();
   }
 
+  // 关键修复（冷缓存跳转失败 → 从整品 mp3 开头出声 = 误放本品第一颂）：
+  // 部署在 Cloudflare 上，mp3 在边缘缓存未命中时会以「整文件、HTTP 200、不支持 Range」返回，
+  // 此时浏览器无法跳到中段；旧代码 loadedmetadata 后立刻 audio.currentTime=start 再 play()，
+  // 跳不动就从 0 秒出声，于是无论高亮哪一颂，听到的都是本品第一颂。
+  // 这里改成：设好目标位置后，确认 currentTime 真的落到本颂起点附近才出声；
+  // 还没缓冲到该位置（seek 跳不动）时静默等待、随缓冲推进重试，绝不放出错颂。
+  function seekThenPlay(target) {
+    var token = (engine.seekToken = (engine.seekToken || 0) + 1);
+    audio.currentTime = target;
+    var waited = 0;
+    var attempt = function () {
+      if (token !== engine.seekToken) return;          // 已被新的播放请求接管 → 放弃本次
+      if (Math.abs(audio.currentTime - target) <= 0.35) {
+        audio.play().catch(function () {});            // 已落到本颂起点 → 出声
+        return;
+      }
+      if (audio.seeking) {                              // 正在跳：别重设（重设会打断本次 seek）
+        if (waited++ < 150) setTimeout(attempt, 100);
+        return;
+      }
+      if (waited++ < 150) {                             // 没在跳又没落点 → 随缓冲增长再试
+        audio.currentTime = target;
+        setTimeout(attempt, 100);
+        return;
+      }
+      audio.play().catch(function () {});               // 兜底：仍出声，由 tick() 守卫继续纠正
+    };
+    setTimeout(attempt, 50);
+  }
+
   // 进度 + 到达本颂 end 的检测（timeupdate 粒度太粗，用 100ms 轮询）
   function tick() {
     var id = engine.queue[engine.index];
     var t = TIMINGS[id];
     if (!t) return;
+    // 守卫：若播放位置滑到本颂起点之前（冷缓存 seek 失败会从整品开头出声），
+    // 立即纠回本颂起点，保证永远不会放成「本品第一颂」。
+    if (!audio.paused && !audio.seeking && audio.currentTime < t.start - 0.5) {
+      audio.currentTime = t.start;
+      return;
+    }
     var prog = document.querySelector('[data-prog="' + id + '"]');
     var span = Math.max(t.end - t.start, 0.01);
     var ratio = Math.min(Math.max((audio.currentTime - t.start) / span, 0), 1);

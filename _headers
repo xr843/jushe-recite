@@ -1,0 +1,7 @@
+# Cloudflare Pages 响应头
+# 偈颂音频是大文件（单品 mp3 约 13MB）。给它们一个长缓存：
+#  - 浏览器缓存整文件后，跳到中段（seek 到某颂起点）就完全可靠 → 不会再误放本品第一颂
+#  - 边缘缓存保持温热 → Range 请求返回 206，逐颂 seek 即时可用
+/600颂-单品/*
+  Cache-Control: public, max-age=31536000, immutable
+  Accept-Ranges: bytes
