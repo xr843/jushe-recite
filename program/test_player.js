@@ -11,7 +11,9 @@ const fakeEl = () => {
   const el = {
     _w: "", style: {}, dataset: {}, textContent: "", innerHTML: "",
     classList: { add(){}, remove(){}, toggle(){}, contains(){return false;} },
-    addEventListener(){}, scrollIntoView(){}, querySelector: () => fakeEl(), querySelectorAll: () => [],
+    addEventListener(){}, scrollIntoView(){}, scrollTo(){},
+    getBoundingClientRect: () => ({ top:0, bottom:0, left:0, right:0, width:0, height:0 }),
+    querySelector: () => fakeEl(), querySelectorAll: () => [],
   };
   Object.defineProperty(el.style, "width", { get(){return el._w;}, set(v){el._w=v;}, configurable:true });
   return el;
@@ -37,13 +39,21 @@ global.setInterval = (fn)=>{ intervalCb = fn; return 1; };
 global.clearInterval = ()=>{ intervalCb = null; };
 global.encodeURIComponent = encodeURIComponent;
 global.Math = Math; global.Set = Set; global.JSON = JSON; global.parseInt = parseInt;
-global.parseFloat = parseFloat; global.setTimeout = ()=>0;
+global.parseFloat = parseFloat;
+// 同步执行 setTimeout 回调：seekThenPlay() 用 setTimeout 推进"确认落点后再 play()"，
+// 测试是同步断言，必须让回调当场跑完，否则永远测不到 play()。
+global.setTimeout = (fn)=>{ if (typeof fn === "function") fn(); return 0; };
+global.clearTimeout = ()=>{};
 
 // ---------- 载入数据 + 引擎 ----------
 let code = fs.readFileSync(path.join(DIR,"verses.js"),"utf8") + "\n";
 code += fs.readFileSync(path.join(DIR,"timings.js"),"utf8") + "\n";
 let html = fs.readFileSync(path.join(DIR,"index.html"),"utf8");
-let engineSrc = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].pop()[1];
+// 取"包含播放引擎"的那个 <script>（页面末尾还有一个注销 SW 的 <script>，不能直接 .pop()）
+let engineSrc = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  .map(function (m) { return m[1]; })
+  .filter(function (s) { return s.indexOf("function playCurrent") !== -1; })
+  .pop();
 // 暴露内部函数供测试（仅改测试副本，不动 index.html）
 engineSrc = engineSrc.replace(/\}\)\(\);\s*$/,
   '; global.__T={get engine(){return engine;}, onSinglePlay, onSingleLoopToggle, onSeqPlay, onSeqLoopToggle, seqStep, stopEngine, playCurrent, selected, byId}; })();');

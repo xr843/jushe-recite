@@ -315,7 +315,7 @@
         <span><input type="range" id="volRange" min="0" max="1" step="0.05"> <b id="volVal">100</b> %</span>
       </div>
       <div style="font-size:11px;color:var(--ink-soft);text-align:center;margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">
-        版本 <code id="appVersion" style="font-family:monospace">2026-06-08-r12</code>
+        版本 <code id="appVersion" style="font-family:monospace">2026-06-24-r13</code>
         　<button id="btnDiag" style="font-size:11px;background:transparent;border:1px solid var(--line);padding:2px 8px;border-radius:4px;color:var(--ink-soft);cursor:pointer">诊断</button>
         　<button id="btnReset" style="font-size:11px;background:transparent;border:1px solid #b5462f;padding:2px 8px;border-radius:4px;color:#b5462f;cursor:pointer">重置应用</button>
       </div>
@@ -675,6 +675,7 @@
 
   function stopEngine() {
     if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+    clearTimeout(engine.loadWatch);
     engine.seekToken = (engine.seekToken || 0) + 1;   // 作废任何在途的 seekThenPlay，别在停止后又出声
     audio.pause();
     engine.mode = null; engine.queue = []; engine.index = 0; engine.paused = false;
@@ -720,6 +721,7 @@
       stopEngine(); return;
     }
     var doPlay = function () {
+      clearTimeout(engine.loadWatch);            // 元数据已就绪 → 撤掉加载看门狗
       applyVol();
       audio.playbackRate = rate;
       seekThenPlay(t.start);                     // 先把光标确实定到本颂起点，再出声
@@ -729,6 +731,13 @@
       audio.src = AUDIO_BASE + encodeURIComponent(t.file);
       audio.addEventListener("loadedmetadata", doPlay, { once: true });
       audio.load();
+      // 加载看门狗：网络很差时 loadedmetadata 可能迟迟不触发（静默卡死），给个提示而不是干等
+      clearTimeout(engine.loadWatch);
+      engine.loadWatch = setTimeout(function () {
+        if (engine.mode && engine.curFile === t.file && audio.readyState < 1) {
+          pulse(document.getElementById("nowPlaying"), "音频加载较慢，请检查网络…");
+        }
+      }, 10000);
     } else {
       doPlay();
     }
@@ -938,10 +947,10 @@
       var v = byId[engine.queue[engine.index]];
       var prefix = engine.paused ? '已暂停　' : '正在连播　';
       var loopBadge = (savedSeqLoop || engine.looping) ? ' <span style="color:var(--accent);font-weight:600">🔁循环中</span>' : '';
-      np.innerHTML = prefix + '<b>' + (engine.index + 1) + ' / ' + engine.queue.length + '</b>　' + pinLabel(v) + loopBadge;
+      np.innerHTML = prefix + '<b>' + (engine.index + 1) + ' / ' + engine.queue.length + '</b>　' + (v ? pinLabel(v) : '') + loopBadge;
     } else if (engine.mode === "single" && engine.timer) {
       var sv = byId[engine.queue[0]];
-      np.innerHTML = '单颂' + (engine.looping ? '循环' : '播放') + '　<b>' + pinLabel(sv) + '</b>';
+      np.innerHTML = '单颂' + (engine.looping ? '循环' : '播放') + '　<b>' + (sv ? pinLabel(sv) : '') + '</b>';
     } else {
       np.textContent = "未开始";
     }
@@ -952,7 +961,7 @@
   // 手机上最常见的用法是息屏 / 揣兜里连播，所以把当前颂的信息和上/下一颂、
   // 播放/暂停接到系统锁屏控件上。全程 try/catch + 特性检测，旧浏览器不支持也不报错。
   function updateMediaSession() {
-    if (!("mediaSession" in navigator)) return;
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
     var ms = navigator.mediaSession;
     var id = engine.queue[engine.index];
     var v = id && byId[id];
@@ -979,7 +988,7 @@
       try { ms.setPositionState({ duration: dur, position: pos, playbackRate: audio.playbackRate || 1 }); } catch (e) {}
     }
   }
-  if ("mediaSession" in navigator) {
+  if (typeof navigator !== "undefined" && "mediaSession" in navigator) {
     var _ms = navigator.mediaSession;
     var _set = function (action, fn) { try { _ms.setActionHandler(action, fn); } catch (e) {} };
     _set("play", function () {
@@ -1017,6 +1026,21 @@
   document.querySelectorAll(".tab").forEach(function (t) {
     t.addEventListener("click", function () { switchView(t.dataset.view); });
   });
+  // 音频硬错误（404 / 网络中断 / 解码失败）：旧版无任何处理 → 静默卡在"假装在播"。
+  // 这里停下并停在"已暂停可续播"状态，给出明确提示。切换 src 引发的 ABORTED 不算错误。
+  audio.addEventListener("error", function () {
+    var err = audio.error;
+    if (!err || err.code === err.MEDIA_ERR_ABORTED) return;
+    if (!engine.mode) return;
+    if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+    clearTimeout(engine.loadWatch);
+    engine.seekToken = (engine.seekToken || 0) + 1;
+    audio.pause();
+    engine.paused = true;
+    syncPlayingUI();
+    document.getElementById("nowPlaying").innerHTML = "⚠ 音频加载失败，请检查网络后点 ▶ 重试";
+  });
+
   document.getElementById("btnSeqPlay").addEventListener("click", onSeqPlay);
   document.getElementById("btnSeqLoop").addEventListener("click", onSeqLoopToggle);
   document.getElementById("btnPrev").addEventListener("click", function () { seqStep(-1); });
