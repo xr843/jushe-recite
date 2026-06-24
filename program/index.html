@@ -945,6 +945,55 @@
     } else {
       np.textContent = "未开始";
     }
+    updateMediaSession();
+  }
+
+  // ---------- 锁屏 / 通知栏播放控制（Media Session）----------
+  // 手机上最常见的用法是息屏 / 揣兜里连播，所以把当前颂的信息和上/下一颂、
+  // 播放/暂停接到系统锁屏控件上。全程 try/catch + 特性检测，旧浏览器不支持也不报错。
+  function updateMediaSession() {
+    if (!("mediaSession" in navigator)) return;
+    var ms = navigator.mediaSession;
+    var id = engine.queue[engine.index];
+    var v = id && byId[id];
+    if (v && id !== engine._msId) {           // 颂变了才刷新元数据
+      engine._msId = id;
+      try {
+        ms.metadata = new MediaMetadata({
+          title: pinLabel(v) + "　" + v.lines[0],
+          artist: "俱舍论本颂　·　" + v.pin,
+          album: "俱舍论本颂",
+          artwork: [
+            { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+            { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" }
+          ]
+        });
+      } catch (e) {}
+    }
+    try { ms.playbackState = engine.timer ? "playing" : (engine.mode ? "paused" : "none"); } catch (e) {}
+    // 锁屏进度条：以"本颂"为一条音轨（start..end）
+    var t = v && TIMINGS[id];
+    if (t) {
+      var dur = Math.max(t.end - t.start, 0.1);
+      var pos = Math.min(Math.max(audio.currentTime - t.start, 0), dur);
+      try { ms.setPositionState({ duration: dur, position: pos, playbackRate: audio.playbackRate || 1 }); } catch (e) {}
+    }
+  }
+  if ("mediaSession" in navigator) {
+    var _ms = navigator.mediaSession;
+    var _set = function (action, fn) { try { _ms.setActionHandler(action, fn); } catch (e) {} };
+    _set("play", function () {
+      if (engine.timer) return;                          // 已在播
+      if (engine.mode === "single") onSinglePlay(engine.queue[0]);
+      else onSeqPlay();                                  // 续播 / 开新一轮连播
+    });
+    _set("pause", function () {
+      if (!engine.timer) return;
+      if (engine.mode === "single") stopEngine();        // 单颂没有"暂停"，停掉
+      else pauseSequence();
+    });
+    _set("previoustrack", function () { seqStep(-1); });
+    _set("nexttrack", function () { seqStep(1); });
   }
 
   // ---------- 视图切换 ----------
