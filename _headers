@@ -2,6 +2,14 @@
 # 偈颂音频是大文件（单品 mp3 约 13MB）。给它们一个长缓存：
 #  - 浏览器缓存整文件后，跳到中段（seek 到某颂起点）就完全可靠 → 不会再误放本品第一颂
 #  - 边缘缓存保持温热 → Range 请求返回 206，逐颂 seek 即时可用
+#
+# 注意：目录名含中文「600颂-单品」。Cloudflare 的 _headers 是按「URL 编码后的请求路径」匹配的，
+# 直接写中文不生效，必须用 percent-encoded 形式（600颂-单品 = 600%E9%A2%82-%E5%8D%95%E5%93%81）。
+/600%E9%A2%82-%E5%8D%95%E5%93%81/*
+  Cache-Control: public, max-age=31536000, immutable
+  Accept-Ranges: bytes
+
+# 兜底：万一未来 CF 改成按解码后路径匹配，这条仍能命中（值相同，重复匹配无害）。
 /600颂-单品/*
   Cache-Control: public, max-age=31536000, immutable
   Accept-Ranges: bytes
