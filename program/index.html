@@ -134,7 +134,12 @@
   .verse .no-tag .g { display: block; font-size: 11px; color: var(--ink-soft); font-weight: 400; margin-top: 2px; }
   .verse .body { flex: 1; }
   .verse .lines { font-size: 20px; line-height: 2.0; letter-spacing: 1px; }
-  .verse .lines .ln { display: block; }
+  .verse .lines .ln {
+    display: block; padding: 1px 6px; margin: 1px -6px; border-radius: 5px;
+    transition: background .12s ease, color .12s ease;
+  }
+  /* 跟诵：当前正在念的那一句高亮（逐句时间由真·句界或按字数插值得出） */
+  .verse .lines .ln.active { background: var(--accent-soft); color: #fff; }
   .verse .meta { font-size: 12px; color: var(--ink-soft); margin-top: 6px; }
   .verse .ops { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex-shrink: 0; }
   .op-btn {
@@ -269,14 +274,14 @@
 </head>
 <body>
   <div class="topbar">
-    <button class="hamburger" id="btnMenu" title="目录">☰</button>
+    <button class="hamburger" id="btnMenu" title="目录" aria-label="打开品目录">☰</button>
     <div class="brand">俱舍论本颂<small>背诵辅助</small></div>
     <div class="tabs">
       <button class="tab active" data-view="all">全部颂</button>
       <button class="tab" data-view="today">今日背诵<span class="badge" id="tabBadge">0</span></button>
     </div>
     <div class="spacer"></div>
-    <button class="icon-btn" id="btnSettings" title="设置">⚙</button>
+    <button class="icon-btn" id="btnSettings" title="设置" aria-label="设置">⚙</button>
   </div>
   <div class="drawer-mask" id="drawerMask"></div>
 
@@ -290,12 +295,12 @@
       </div>
       <div class="today-list" id="todayList"></div>
       <div class="player">
-        <div class="now-playing" id="nowPlaying">未开始</div>
+        <div class="now-playing" id="nowPlaying" aria-live="polite" role="status">未开始</div>
         <div class="controls">
-          <button class="pbtn" id="btnPrev" title="上一颂">⏮</button>
-          <button class="pbtn main" id="btnSeqPlay" title="连播/暂停">▶</button>
-          <button class="pbtn" id="btnNext" title="下一颂">⏭</button>
-          <button class="pbtn loop" id="btnSeqLoop" title="列表循环">🔁</button>
+          <button class="pbtn" id="btnPrev" title="上一颂" aria-label="上一颂">⏮</button>
+          <button class="pbtn main" id="btnSeqPlay" title="连播/暂停" aria-label="连播或暂停">▶</button>
+          <button class="pbtn" id="btnNext" title="下一颂" aria-label="下一颂">⏭</button>
+          <button class="pbtn loop" id="btnSeqLoop" title="列表循环" aria-label="列表循环">🔁</button>
         </div>
         <button class="clear" id="btnClear">清空列表</button>
       </div>
@@ -341,7 +346,6 @@
   var LS_RATE = "kusha_rate_v1";
   var LS_VOL = "kusha_vol_v1";
   var LS_LAST = "kusha_last_v1";          // 上次背到哪一颂的 id
-  var LS_LOOP = "kusha_loop_v1";          // 列表循环开关
   var selected = loadSelected();          // Set of verse id（今日背诵）
   var rate = parseFloat(localStorage.getItem(LS_RATE) || "1");
   var vol = parseFloat(localStorage.getItem(LS_VOL) || "1");
@@ -363,7 +367,9 @@
     looping: false,    // single: 单曲循环；sequence: 列表循环
     paused: false,     // sequence 暂停态（保留 queue/index，下次续播）
     curFile: null,     // 当前已载入 audio 的 mp3 文件名
-    timer: null        // 进度/结束轮询 interval（truthy 即表示正在播放）
+    timer: null,       // 进度/结束轮询 interval（truthy 即表示正在播放）
+    _lineCard: null,   // 当前高亮句所在的卡片（逐句高亮去抖用）
+    _lineKey: null     // "id:句序" 去抖键：只在换句时碰 DOM
   };
 
   var byId = {};
@@ -382,6 +388,25 @@
   }
   function pinLabel(v) { return v.pin.replace("品", "").replace("分", "") + v.localNo; }
   function fmt(sec) { var m = Math.floor(sec / 60), s = Math.floor(sec % 60); return m + ":" + (s < 10 ? "0" : "") + s; }
+
+  // 逐句时间：优先用强制对齐产出的真·句界（timings.js 里若带 lines 字段，
+  // 由升级后的 align.py + build_timings.py 生成）；没有就用整颂 [start,end]
+  // 按每句字数比例插值。念诵节奏较匀，插值对「当前念到第几句」已足够。
+  function getLineTimings(v, t) {
+    if (!t) return null;
+    if (t.lines && t.lines.length === v.lines.length) return t.lines;
+    var total = 0;
+    v.lines.forEach(function (l) { total += l.length; });
+    if (!total) return null;
+    var span = Math.max(t.end - t.start, 0.01);
+    var out = [], acc = 0;
+    for (var i = 0; i < v.lines.length; i++) {
+      var s = t.start + span * (acc / total);
+      acc += v.lines[i].length;
+      out.push({ start: s, end: t.start + span * (acc / total) });
+    }
+    return out;
+  }
 
   // ---------- 渲染：左栏目录 ----------
   function renderCatalog() {
@@ -455,7 +480,8 @@
       html += verseCard(v);
     });
     main.innerHTML = html;
-    bindCards(main);
+    // 卡片重建后，正在播的逐句高亮 DOM 引用已失效；重置去抖键让下一个 tick 重新上色
+    engine._lineCard = null; engine._lineKey = null;
     syncPlayingUI();
   }
   function pinMeta(pin) {
@@ -473,11 +499,11 @@
     }).join("");
     var t = TIMINGS[v.id];
     var audioNote = t
-      ? ('🎵 ' + fmt(t.start) + ' – ' + fmt(t.end) + ' · ' + (v.audioFile || '1.界品.mp3'))
+      ? ('🎵 ' + fmt(t.start) + ' – ' + fmt(t.end) + ' · ' + t.file)
       : '⏳ 音频待对齐';
     return '' +
       '<div class="verse" id="verse-' + v.id + '" data-id="' + v.id + '">' +
-        '<div class="check"><input type="checkbox" data-check="' + v.id + '" ' + checked + '></div>' +
+        '<div class="check"><input type="checkbox" data-check="' + v.id + '" aria-label="选入今日背诵" ' + checked + '></div>' +
         '<div class="no-tag">' + noTag + '</div>' +
         '<div class="body">' +
           '<div class="lines">' + lines + '</div>' +
@@ -490,18 +516,19 @@
         '<div class="progress" data-prog="' + v.id + '"></div>' +
       '</div>';
   }
-  function bindCards(root) {
-    root.querySelectorAll("[data-check]").forEach(function (cb) {
-      cb.addEventListener("change", function () { toggleSelect(cb.dataset.check, cb.checked); });
+  // 事件委托：#mainList 内容随渲染频繁重建，把监听挂在稳定的容器上（一次绑定），
+  // 避免每次 renderMain 给数百张卡逐一 addEventListener。
+  function bindMainDelegation(root) {
+    root.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-play],[data-loop],[data-pin-sel]");
+      if (!b || !root.contains(b)) return;
+      if (b.hasAttribute("data-play")) onSinglePlay(b.getAttribute("data-play"));
+      else if (b.hasAttribute("data-loop")) onSingleLoopToggle(b.getAttribute("data-loop"));
+      else if (b.hasAttribute("data-pin-sel")) togglePinSelect(b.getAttribute("data-pin-sel"));
     });
-    root.querySelectorAll("[data-play]").forEach(function (b) {
-      b.addEventListener("click", function () { onSinglePlay(b.dataset.play); });
-    });
-    root.querySelectorAll("[data-loop]").forEach(function (b) {
-      b.addEventListener("click", function () { onSingleLoopToggle(b.dataset.loop); });
-    });
-    root.querySelectorAll("[data-pin-sel]").forEach(function (b) {
-      b.addEventListener("click", function () { togglePinSelect(b.dataset.pinSel); });
+    root.addEventListener("change", function (e) {
+      var cb = e.target.closest("[data-check]");
+      if (cb && root.contains(cb)) toggleSelect(cb.getAttribute("data-check"), cb.checked);
     });
   }
 
@@ -708,6 +735,36 @@
   }
   function resetAllProgress() {
     document.querySelectorAll("[data-prog]").forEach(function (p) { p.style.width = "0%"; });
+    clearLineHighlight();
+  }
+  // 逐句高亮：当前正在念的那一句加 .active；只动正在播的那张卡，且仅在
+  // 「当前句」变化时才碰 DOM（_lineKey 去抖），100ms tick 下零额外开销。
+  function clearLineHighlight() {
+    if (engine._lineCard) {
+      var a = engine._lineCard.querySelectorAll(".ln.active");
+      for (var i = 0; i < a.length; i++) a[i].classList.remove("active");
+    }
+    engine._lineCard = null;
+    engine._lineKey = null;
+  }
+  function highlightLine(id, t) {
+    var v = byId[id];
+    var card = document.getElementById("verse-" + id);
+    if (!v || !card || !t) return;
+    var lts = getLineTimings(v, t);
+    if (!lts) return;
+    var ct = audio.currentTime, idx = lts.length - 1;
+    for (var i = 0; i < lts.length; i++) { if (ct < lts[i].end) { idx = i; break; } }
+    var key = id + ":" + idx;
+    if (key === engine._lineKey) return;
+    engine._lineKey = key;
+    if (engine._lineCard && engine._lineCard !== card) {
+      var prev = engine._lineCard.querySelectorAll(".ln.active");
+      for (var p = 0; p < prev.length; p++) prev[p].classList.remove("active");
+    }
+    engine._lineCard = card;
+    var lns = card.querySelectorAll(".lines .ln");
+    for (var k = 0; k < lns.length; k++) lns[k].classList.toggle("active", k === idx);
   }
 
   // 载入并从该颂起点开始播放当前 queue[index]
@@ -790,6 +847,7 @@
     var span = Math.max(t.end - t.start, 0.01);
     var ratio = Math.min(Math.max((audio.currentTime - t.start) / span, 0), 1);
     if (prog) prog.style.width = (ratio * 100) + "%";
+    highlightLine(id, t);
     if (audio.currentTime >= t.end - 0.02) onVerseEnd();
   }
   function onVerseEnd() {
@@ -1135,6 +1193,7 @@
   });
 
   // ---------- 初始化 ----------
+  bindMainDelegation(document.getElementById("mainList"));
   renderCatalog();
   renderMain();
   renderToday();

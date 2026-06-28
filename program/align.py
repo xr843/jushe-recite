@@ -244,10 +244,30 @@ def process_pin(short, all_verses, audio_dur_cache={}):
         pos += c
         start = seg[0][0]
         end = seg[-1][1]
+        # 逐句边界：按本颂各句字数切 seg（字级时间），取每句首字 start / 末字 end。
+        # 前端 getLineTimings() 优先用这里产出的真·句界做「当前念到第几句」高亮，
+        # 没有时退回按字数插值。字级时间本就算好，这里顺手吐出，零额外成本。
+        line_times = []
+        lp = 0
+        for ln in v["lines"]:
+            lc = len(ln)
+            lseg = seg[lp:lp + lc]
+            if lseg:
+                line_times.append({
+                    "start": round(lseg[0][0], 2),
+                    "end": round(lseg[-1][1], 2),
+                })
+            else:
+                # 空句（俱舍颂理论上不会出现）：放零宽占位，保持 lines 与 v.lines
+                # 等长，否则前端等长校验失败会让整颂退回按字数插值。
+                edge = seg[lp][0] if lp < len(seg) else (seg[-1][1] if seg else start)
+                line_times.append({"start": round(edge, 2), "end": round(edge, 2)})
+            lp += lc
         out.append({
             "id": v["id"], "pin": v["pin"], "localNo": v["localNo"], "globalNo": v["globalNo"],
             "start": round(start, 2), "end": round(end, 2),
             "dur": round(end - start, 2), "nchars": c,
+            "lines": line_times,
             "text": "".join(v["lines"]),
         })
 
