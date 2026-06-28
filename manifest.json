@@ -2,7 +2,7 @@
   "name": "俱舍论本颂背诵辅助",
   "short_name": "俱舍论本颂",
   "description": "按品浏览俱舍论本颂、按音频自动连播,辅助每日背诵",
-  "start_url": "/program/index.html",
+  "start_url": "/program/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",

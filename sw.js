@@ -11,14 +11,15 @@
 //
 // 逃生舱：设置里的「重置应用」会注销本 SW 并清空所有缓存。
 
-const SHELL_CACHE = "jushe-shell-v1";
+const SHELL_CACHE = "jushe-shell-v2"; // v2：废弃 v1 里会 308 的 /program/index.html、/index.html 缓存
 const AUDIO_CACHE = "jushe-audio-v1"; // 跨 shell 升级保持不变，避免误删用户已下载的品
 
 const SHELL_ASSETS = [
-  // 不预缓存 "/"：它 302 跳到 /program/index.html，存的是重定向响应，
-  // 用于导航会触发 "redirected response" 报错。start_url 本就是 /program/index.html。
-  "/index.html",
-  "/program/index.html",
+  // 只预缓存「不会被 Cloudflare 重定向」的规范 URL。
+  // 关键教训：Cloudflare Pages 的 clean-URL 会把 /program/index.html（及 /index.html）
+  // 308 跳到 /program/，cache.add 跟随后存成 redirected 响应——而浏览器禁止 SW 把
+  // redirected 响应用于「导航」，会 ERR_FAILED 打不开整个 PWA。所以这里用 "/program/"。
+  "/program/",
   "/program/verses.js",
   "/program/timings.js",
   "/manifest.json",
@@ -55,6 +56,18 @@ self.addEventListener("activate", (event) => {
 function isAudioPath(pathname) {
   // 音频在 /600颂-单品/ 下（请求路径为 URL 编码形式，以 /600 开头），扩展名 .mp3 或 .opus
   return /\.(mp3|opus)$/i.test(pathname) && pathname.indexOf("/600") === 0;
+}
+
+// 把任意响应重建为「非 redirected」的 200。浏览器禁止 SW 把 redirected 响应用于导航；
+// 手动 new Response(...) 出来的响应 redirected 恒为 false，从而可安全用于导航。
+// 丢掉会与重建后 blob 不一致的实体头（长度/编码/Range），避免将来 CF 加 gzip 时出错。
+async function toShell(resp) {
+  const body = await resp.blob();
+  const headers = new Headers(resp.headers);
+  ["content-length", "content-encoding", "content-range", "transfer-encoding"].forEach((h) =>
+    headers.delete(h)
+  );
+  return new Response(body, { status: 200, statusText: "OK", headers });
 }
 
 // 从缓存的完整响应里，按请求的 Range 头切出 206 partial（音频元素 seek 必需）。
@@ -131,29 +144,55 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // app-shell / 其它同源 GET：stale-while-revalidate。
-  // 先给缓存（保证离线可开 + 秒开），同时后台拉新存回 SHELL_CACHE，下次加载即更新——
-  // 这样只改了 HTML/JS 而没改 sw.js 时，用户也不会被钉死在旧壳上（当年自杀脚本要治的病）。
-  // 无缓存时走网络；网络失败且是导航请求则回退到 app 壳。
+  // 导航请求（打开 app）：始终供给「规范 /program/ 壳」并重建成非 redirected 响应。
+  // 为什么单独处理：Cloudflare 把 /program/index.html（PWA 的 start_url）308 跳到
+  // /program/；无论 cache.add 还是 fetch(req) 都会得到 redirected 响应，而浏览器禁止
+  // 把它用于导航 → 整个 PWA ERR_FAILED。这里 ① 后台用 /program/ 拉新（避开 308），
+  // ② 命中缓存先给（SWR 秒开/离线可开），③ 缓存与网络都过 toShell() 去 redirected 标记。
+  if (req.mode === "navigate") {
+    // /program/ 之外的导航（裸域 / 或 /index.html）：合成 302 跳到规范入口。
+    // 不能 fallthrough（通用分支会跟 CF 的跳转得到 redirected 响应 → ERR_FAILED），
+    // 也不能直接供 /program/ 壳（壳里 verses.js/timings.js 是相对路径，在 / 下会 404）。
+    // Response.redirect() 是合成跳转，redirected 恒 false，浏览器会正常跟随。
+    if (url.pathname.indexOf("/program/") !== 0) {
+      event.respondWith(Response.redirect("/program/", 302));
+      return;
+    }
+    event.respondWith(
+      caches.open(SHELL_CACHE).then(async (cache) => {
+        const revalidate = fetch("/program/")
+          .then(async (net) => {
+            if (net && net.ok) {
+              const clean = await toShell(net);
+              cache.put("/program/", clean.clone()).catch(() => {});
+              return clean;
+            }
+            return null;
+          })
+          .catch(() => null); // 后台更新，不阻塞返回
+        const cached = await cache.match("/program/");
+        if (cached) return toShell(cached); // SWR：先给缓存壳，revalidate 后台跑
+        return (await revalidate) || Response.error();
+      })
+    );
+    return;
+  }
+
+  // 其它同源 GET（verses.js / timings.js / icons / manifest 等真实文件，无重定向）：
+  // stale-while-revalidate —— 先给缓存（离线可开 + 秒开），后台拉新存回，下次即更新。
   event.respondWith(
     caches.open(SHELL_CACHE).then((cache) =>
       cache.match(req).then((hit) => {
         const network = fetch(req)
           .then((resp) => {
-            // 只回存成功的同源完整响应（200 basic），不存重定向/opaque/错误
-            if (resp && resp.status === 200 && resp.type === "basic") {
+            // 只回存成功、非重定向的同源完整响应（200 basic 且未跟过跳转）
+            if (resp && resp.status === 200 && resp.type === "basic" && !resp.redirected) {
               cache.put(req, resp.clone()).catch(() => {});
             }
             return resp;
           })
           .catch(() => null);
-        return (
-          hit ||
-          network.then((resp) =>
-            resp ||
-            (req.mode === "navigate" ? cache.match("/program/index.html") : Response.error())
-          )
-        );
+        return hit || network.then((resp) => resp || Response.error());
       })
     )
   );
