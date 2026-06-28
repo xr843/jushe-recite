@@ -391,6 +391,16 @@
   var TIMINGS = window.TIMINGS || {};     // {id: {file, start, end}}，强制对齐结果
   var audio = document.getElementById("audio");
   var AUDIO_BASE = "../600颂-单品/";
+  // 浏览器支持 Opus 就用 .opus（约省 2/3 体积），否则回退 mp3。一次判定。
+  var AUDIO_EXT = (function () {
+    try {
+      var probe = document.createElement("audio");
+      if (probe.canPlayType('audio/ogg; codecs="opus"') || probe.canPlayType("audio/opus")) return "opus";
+    } catch (e) {}
+    return "mp3";
+  })();
+  // TIMINGS 里存的是 .mp3 名；按浏览器支持换成最佳格式（opus/mp3）
+  function audioFile(name) { return AUDIO_EXT === "opus" ? name.replace(/\.mp3$/i, ".opus") : name; }
 
   // 播放引擎状态（真实音频）
   var engine = {
@@ -857,7 +867,7 @@
     };
     if (engine.curFile !== t.file) {            // 需要切换 mp3
       engine.curFile = t.file;
-      audio.src = AUDIO_BASE + encodeURIComponent(t.file);
+      audio.src = AUDIO_BASE + encodeURIComponent(audioFile(t.file));
       audio.addEventListener("loadedmetadata", doPlay, { once: true });
       audio.load();
       // 加载看门狗：网络很差时 loadedmetadata 可能迟迟不触发（静默卡死），给个提示而不是干等
@@ -1160,7 +1170,7 @@
   var downloading = {};   // 按品名记在途下载，防重入（按钮在 renderOfflineList 重渲染时会被替换）
   function offlineSupported() { return "caches" in window; }
   // 与 <audio> 实际请求一致的绝对 URL，作为 Cache 键，和 sw.js 的 match 对齐
-  function audioHref(file) { return new URL(AUDIO_BASE + encodeURIComponent(file), location.href).href; }
+  function audioHref(file) { return new URL(AUDIO_BASE + encodeURIComponent(audioFile(file)), location.href).href; }
   async function cachedHrefs() {
     if (!offlineSupported()) return {};
     try {
@@ -1221,10 +1231,11 @@
       // 完整性校验：流提前干净结束（代理/HTTP2 偶发）会存成截断文件，SW 之后会把
       // 截断当完整供给 = 静默污染。已知 total 时严格校验，宁可不存。
       if (total && received !== total) throw new Error("下载不完整 " + received + "/" + total);
-      var blob = new Blob(chunks, { type: "audio/mpeg" });
+      var ctype = /\.opus$/i.test(href) ? "audio/ogg" : "audio/mpeg";
+      var blob = new Blob(chunks, { type: ctype });
       var cache = await caches.open(AUDIO_CACHE);
       await cache.put(href, new Response(blob, { status: 200, headers: {
-        "Content-Type": "audio/mpeg", "Content-Length": String(received), "Accept-Ranges": "bytes" } }));
+        "Content-Type": ctype, "Content-Length": String(received), "Accept-Ranges": "bytes" } }));
     } catch (e) {
       delete downloading[p.audio];
       st.textContent = "失败"; btn.disabled = false; btn.textContent = "重试";
@@ -1244,6 +1255,17 @@
     var err = audio.error;
     if (!err || err.code === err.MEDIA_ERR_ABORTED) return;
     if (!engine.mode) return;
+    // Opus 误报可播：个别浏览器 canPlayType 说支持却解不了。遇解码/格式错就本会话
+    // 降级到 mp3 重试一次，避免 ▶ 反复请求同一 opus 死循环 + 离线已下 opus 不可播。
+    if (AUDIO_EXT === "opus" && !engine._opusFellBack &&
+        (err.code === err.MEDIA_ERR_DECODE || err.code === err.MEDIA_ERR_SRC_NOT_SUPPORTED)) {
+      engine._opusFellBack = true;
+      AUDIO_EXT = "mp3";
+      engine.curFile = null;   // 强制 playCurrent 重新载入（这次走 mp3）
+      if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+      playCurrent();
+      return;
+    }
     if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
     clearTimeout(engine.loadWatch);
     engine.seekToken = (engine.seekToken || 0) + 1;

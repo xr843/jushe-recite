@@ -23,6 +23,9 @@ ROOT = str(Path(__file__).resolve().parent.parent)  # 仓库根
 class RangeRequestHandler(SimpleHTTPRequestHandler):
     """在 SimpleHTTPRequestHandler 基础上支持单段 Range（够浏览器 seek 用）。"""
 
+    # .opus 不在 Python 默认 mimetypes 里，补上（生产 Cloudflare 自带 audio/ogg）
+    extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".opus": "audio/ogg"}
+
     def end_headers(self):
         self.send_header("Accept-Ranges", "bytes")
         super().end_headers()

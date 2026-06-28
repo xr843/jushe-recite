@@ -40,7 +40,14 @@ program/
   build_timings.py       合并 aligned_*.json → timings.js
   serve.py               本地 HTTP Range 服务
 600颂-单品/*.mp3          8 个品的念诵音频，已 ffmpeg loudnorm 至 -14 LUFS
+600颂-单品/*.opus         同上的 Opus 版（48k mono，约省 2/3 体积）；浏览器支持则优先用，否则回退 mp3
 文本资料/                  偈颂校对版 docx
+```
+
+重新生成 Opus（改了 mp3 后）：
+```bash
+cd 600颂-单品
+for f in *.mp3; do ffmpeg -y -i "$f" -c:a libopus -b:a 48k -ac 1 -application audio "${f%.mp3}.opus"; done
 ```
 
 ## 致谢 / Acknowledgements
