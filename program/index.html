@@ -214,6 +214,22 @@
   .modal .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; font-size: 14px; }
   .modal input[type=range] { width: 150px; accent-color: var(--accent); }
   .modal .close { display: block; margin: 18px auto 0; background: var(--accent); color: #fff; border: none; padding: 8px 30px; border-radius: 8px; }
+  /* 离线音频区 */
+  .offline-sec { margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .offline-head { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .offline-hint { font-size: 11px; font-weight: 400; color: var(--ink-soft); }
+  .offline-list { max-height: 210px; overflow-y: auto; }
+  .offline-row { display: flex; align-items: center; gap: 8px; padding: 5px 2px; font-size: 13px; }
+  .offline-row .nm { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .offline-row .st { font-size: 11px; color: var(--ink-soft); min-width: 52px; text-align: right; }
+  .offline-row .st.done { color: var(--accent); }
+  .offline-row .dl {
+    border: 1px solid var(--accent-soft); background: var(--paper); color: var(--accent);
+    padding: 3px 10px; border-radius: 6px; font-size: 12px; white-space: nowrap;
+  }
+  .offline-row .dl:hover { background: var(--accent-bg); }
+  .offline-row .dl.cached { color: #b5462f; border-color: #e0b3a6; }
+  .offline-row .dl[disabled] { opacity: .5; cursor: default; }
 
   ::-webkit-scrollbar { width: 9px; }
   ::-webkit-scrollbar-thumb { background: #d8cfba; border-radius: 5px; }
@@ -331,8 +347,12 @@
         <span>音量</span>
         <span><input type="range" id="volRange" min="0" max="1" step="0.05"> <b id="volVal">100</b> %</span>
       </div>
+      <div class="offline-sec">
+        <div class="offline-head">离线音频 <span class="offline-hint" id="offlineHint">下载后该品可无网背诵</span></div>
+        <div class="offline-list" id="offlineList"></div>
+      </div>
       <div style="font-size:11px;color:var(--ink-soft);text-align:center;margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">
-        版本 <code id="appVersion" style="font-family:monospace">2026-06-24-r13</code>
+        版本 <code id="appVersion" style="font-family:monospace">2026-06-28-r14</code>
         　<button id="btnDiag" style="font-size:11px;background:transparent;border:1px solid var(--line);padding:2px 8px;border-radius:4px;color:var(--ink-soft);cursor:pointer">诊断</button>
         　<button id="btnReset" style="font-size:11px;background:transparent;border:1px solid #b5462f;padding:2px 8px;border-radius:4px;color:#b5462f;cursor:pointer">重置应用</button>
       </div>
@@ -1131,8 +1151,88 @@
     document.getElementById("volRange").value = vol;
     document.getElementById("volVal").textContent = Math.round(vol * 100);
     document.getElementById("settingsMask").classList.add("open");
+    renderOfflineList();
   }
   function closeSettings() { document.getElementById("settingsMask").classList.remove("open"); }
+
+  // ---------- 离线音频（每品手动下载，SW 从缓存供给）----------
+  var AUDIO_CACHE = "jushe-audio-v1";
+  var downloading = {};   // 按品名记在途下载，防重入（按钮在 renderOfflineList 重渲染时会被替换）
+  function offlineSupported() { return "caches" in window; }
+  // 与 <audio> 实际请求一致的绝对 URL，作为 Cache 键，和 sw.js 的 match 对齐
+  function audioHref(file) { return new URL(AUDIO_BASE + encodeURIComponent(file), location.href).href; }
+  async function cachedHrefs() {
+    if (!offlineSupported()) return {};
+    try {
+      var c = await caches.open(AUDIO_CACHE);
+      var keys = await c.keys();
+      var set = {};
+      keys.forEach(function (req) { set[req.url] = true; });
+      return set;
+    } catch (e) { return {}; }
+  }
+  async function renderOfflineList() {
+    var box = document.getElementById("offlineList");
+    if (!box) return;
+    if (!offlineSupported()) {
+      box.innerHTML = '<div style="font-size:12px;color:var(--ink-soft)">此浏览器不支持离线缓存。</div>';
+      return;
+    }
+    var cached = await cachedHrefs();
+    box.innerHTML = "";
+    PIN_LIST.forEach(function (p) {
+      var isCached = !!cached[audioHref(p.audio)];
+      var row = document.createElement("div");
+      row.className = "offline-row";
+      row.innerHTML =
+        '<span class="nm">' + p.name + '</span>' +
+        '<span class="st' + (isCached ? " done" : "") + '">' + (isCached ? "已离线 ✓" : "未下载") + '</span>' +
+        '<button class="dl' + (isCached ? " cached" : "") + '">' + (isCached ? "删除" : "下载") + '</button>';
+      var btn = row.querySelector(".dl");
+      var st = row.querySelector(".st");
+      btn.addEventListener("click", function () { onOfflineToggle(p, btn, st, isCached); });
+      box.appendChild(row);
+    });
+  }
+  async function onOfflineToggle(p, btn, st, isCached) {
+    if (downloading[p.audio]) return;   // 在途下载中，忽略再次点击
+    var href = audioHref(p.audio);
+    if (isCached) {
+      btn.disabled = true; st.textContent = "删除中…";
+      try { var c = await caches.open(AUDIO_CACHE); await c.delete(href, { ignoreVary: true }); } catch (e) {}
+      renderOfflineList();
+      return;
+    }
+    downloading[p.audio] = true;
+    btn.disabled = true; btn.textContent = "下载中"; st.classList.remove("done");
+    try {
+      var resp = await fetch(href);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      var total = parseInt(resp.headers.get("content-length") || "0", 10);
+      var reader = resp.body.getReader();
+      var chunks = [], received = 0;
+      while (true) {
+        var r = await reader.read();
+        if (r.done) break;
+        chunks.push(r.value); received += r.value.length;
+        st.textContent = total ? (Math.round(received / total * 100) + "%")
+                               : ((received / 1048576).toFixed(1) + "M");
+      }
+      // 完整性校验：流提前干净结束（代理/HTTP2 偶发）会存成截断文件，SW 之后会把
+      // 截断当完整供给 = 静默污染。已知 total 时严格校验，宁可不存。
+      if (total && received !== total) throw new Error("下载不完整 " + received + "/" + total);
+      var blob = new Blob(chunks, { type: "audio/mpeg" });
+      var cache = await caches.open(AUDIO_CACHE);
+      await cache.put(href, new Response(blob, { status: 200, headers: {
+        "Content-Type": "audio/mpeg", "Content-Length": String(received), "Accept-Ranges": "bytes" } }));
+    } catch (e) {
+      delete downloading[p.audio];
+      st.textContent = "失败"; btn.disabled = false; btn.textContent = "重试";
+      return;
+    }
+    delete downloading[p.audio];
+    renderOfflineList();
+  }
 
   // ---------- 事件绑定 ----------
   document.querySelectorAll(".tab").forEach(function (t) {
@@ -1297,17 +1397,19 @@
 })();
 </script>
 <script>
-  // 不再注册 service worker。如果浏览器之前装过旧 SW，下面这段会主动注销它，
-  // 顺便清空所有 Cache Storage，避免老缓存把页面卡在过时版本/半残状态。
+  // 注册离线 service worker（窄范围：app-shell 预缓存 + 用户手动下载的品离线供给）。
+  // 新 SW skipWaiting+claim 后会触发 controllerchange，这里只 reload 一次让页面被新
+  // SW 接管（swRefreshing 去重防 reload 循环）。「重置应用」按钮仍是注销 SW 的逃生舱。
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then(function (regs) {
-      regs.forEach(function (reg) { reg.unregister().catch(function () {}); });
-    }).catch(function () {});
-    if (window.caches) {
-      caches.keys().then(function (keys) {
-        keys.forEach(function (k) { caches.delete(k).catch(function () {}); });
-      }).catch(function () {});
-    }
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+    });
+    var swRefreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (swRefreshing) return;
+      swRefreshing = true;
+      location.reload();
+    });
   }
 </script>
 </body>
