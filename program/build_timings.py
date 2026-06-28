@@ -36,11 +36,16 @@ def main():
             if not file:
                 print(f"  ! 未知品名 {v['pin']}（{v['id']}），跳过")
                 continue
-            timings[v["id"]] = {
+            entry = {
                 "file": file,
                 "start": v["start"],
                 "end": v["end"],
             }
+            # 若该颂带逐句边界（升级后的 align.py 产出），一并带给前端做逐句高亮。
+            # 老的 aligned_*.json 没有这个字段，前端会自动退回按字数插值。
+            if v.get("lines"):
+                entry["lines"] = v["lines"]
+            timings[v["id"]] = entry
             n += 1
         pins_done.append(f"{path.name}({n})")
 
