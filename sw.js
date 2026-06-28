@@ -53,8 +53,8 @@ self.addEventListener("activate", (event) => {
 });
 
 function isAudioPath(pathname) {
-  // 音频在 /600颂-单品/ 下（请求路径为 URL 编码形式，以 /600 开头），扩展名 .mp3
-  return /\.mp3$/i.test(pathname) && pathname.indexOf("/600") === 0;
+  // 音频在 /600颂-单品/ 下（请求路径为 URL 编码形式，以 /600 开头），扩展名 .mp3 或 .opus
+  return /\.(mp3|opus)$/i.test(pathname) && pathname.indexOf("/600") === 0;
 }
 
 // 从缓存的完整响应里，按请求的 Range 头切出 206 partial（音频元素 seek 必需）。
@@ -65,7 +65,9 @@ async function serveFromCache(request, cached) {
   const blob = await cached.blob();
   const total = blob.size;
   const range = request.headers.get("range");
-  const baseHeaders = { "Content-Type": "audio/mpeg", "Accept-Ranges": "bytes" };
+  // .opus → audio/ogg，否则 audio/mpeg
+  const ctype = /\.opus(\?|$)/i.test(request.url) ? "audio/ogg" : "audio/mpeg";
+  const baseHeaders = { "Content-Type": ctype, "Accept-Ranges": "bytes" };
 
   if (!range) {
     return new Response(blob, {
