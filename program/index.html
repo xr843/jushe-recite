@@ -70,6 +70,15 @@
     border-radius: 10px; font-size: 17px; color: var(--ink-soft);
   }
   .icon-btn:hover { background: var(--accent-bg); }
+  /* 搜索框 */
+  .search { margin-left: 16px; flex: 1; max-width: 320px; min-width: 0; }
+  .search input {
+    width: 100%; padding: 8px 14px; border: 1px solid var(--line); border-radius: 18px;
+    font-size: 14px; background: var(--bg); color: var(--ink); font-family: inherit;
+  }
+  .search input::placeholder { color: var(--ink-soft); }
+  .search input:focus { outline: none; border-color: var(--accent-soft); background: var(--paper); }
+  mark { background: #ffe49c; color: inherit; padding: 0 1px; border-radius: 2px; }
   .hamburger { display: none; border: 1px solid var(--line); background: transparent;
     width: 36px; height: 36px; border-radius: 8px; font-size: 18px; color: var(--ink);
     align-items: center; justify-content: center; }
@@ -217,6 +226,8 @@
     .topbar .brand { display: none; }
     .tabs { margin-left: 0; gap: 6px; }
     .tab { padding: 5px 12px; font-size: 13px; }
+    .search { margin-left: 8px; }
+    .search input { padding: 6px 12px; font-size: 13px; }
     .hamburger { display: inline-flex; }
 
     .layout { display: block; height: calc(100% - 52px); position: relative; }
@@ -280,6 +291,7 @@
       <button class="tab active" data-view="all">全部颂</button>
       <button class="tab" data-view="today">今日背诵<span class="badge" id="tabBadge">0</span></button>
     </div>
+    <div class="search"><input id="searchInput" type="search" placeholder="搜索偈颂…" aria-label="搜索偈颂正文" autocomplete="off"></div>
     <div class="spacer"></div>
     <button class="icon-btn" id="btnSettings" title="设置" aria-label="设置">⚙</button>
   </div>
@@ -352,6 +364,7 @@
   if (!isFinite(vol)) vol = 1;
   vol = Math.min(Math.max(vol, 0), 1);
   var view = "all";
+  var query = "";   // 搜索关键词（非空时主区显示全库匹配结果，命中处高亮）
 
   function applyVol() { audio.volume = vol; }
 
@@ -408,6 +421,29 @@
     return out;
   }
 
+  // ---------- 搜索 ----------
+  function matchesQuery(v) {
+    if (!query) return true;
+    for (var i = 0; i < v.lines.length; i++) {
+      if (v.lines[i].indexOf(query) >= 0) return true;
+    }
+    return false;
+  }
+  // 命中高亮：把行内匹配子串包 <mark>。行文本来自可信数据，只对可信文本切片
+  // 做包裹，绝不把用户输入注入 HTML，安全。
+  function hlMatch(text) {
+    if (!query) return text;
+    var idx = text.indexOf(query);
+    if (idx < 0) return text;
+    var out = "", from = 0;
+    while (idx >= 0) {
+      out += text.slice(from, idx) + "<mark>" + text.slice(idx, idx + query.length) + "</mark>";
+      from = idx + query.length;
+      idx = text.indexOf(query, from);
+    }
+    return out + text.slice(from);
+  }
+
   // ---------- 渲染：左栏目录 ----------
   function renderCatalog() {
     var groups = {};
@@ -435,7 +471,7 @@
     cat.querySelectorAll(".pin-head").forEach(function (h) {
       h.addEventListener("click", function () {
         h.parentNode.classList.toggle("open");
-        if (view !== "all") switchView("all");
+        if (view !== "all" || query) switchView("all");
         var pin = h.parentNode.dataset.pin;
         var el = document.getElementById("pintitle-" + pin);
         if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -444,9 +480,9 @@
     });
     cat.querySelectorAll(".pin-item").forEach(function (it) {
       it.addEventListener("click", function () {
-        if (view !== "all") { switchView("all"); }
+        if (view !== "all" || query) { switchView("all"); }
         var el = document.getElementById("verse-" + it.dataset.goto);
-        if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); }
+        if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); setHash(it.dataset.goto); }
         closeMobileDrawer();
       });
     });
@@ -457,12 +493,27 @@
   }
 
   // ---------- 渲染：主区颂列表 ----------
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
   function renderMain() {
-    var list = view === "all" ? VERSES : selectedOrdered();
     var main = document.getElementById("mainList");
-    if (view === "today" && list.length === 0) {
-      main.innerHTML = '<div class="empty-hint">今日背诵列表为空。<br>切到「全部颂」勾选你今天要背的偈颂吧。</div>';
-      return;
+    var list;
+    if (query) {
+      list = VERSES.filter(matchesQuery);
+      if (list.length === 0) {
+        main.innerHTML = '<div class="empty-hint">没有匹配「' + escHtml(query) + '」的偈颂。</div>';
+        engine._lineCard = null; engine._lineKey = null;
+        return;
+      }
+    } else {
+      list = view === "all" ? VERSES : selectedOrdered();
+      if (view === "today" && list.length === 0) {
+        main.innerHTML = '<div class="empty-hint">今日背诵列表为空。<br>切到「全部颂」勾选你今天要背的偈颂吧。</div>';
+        return;
+      }
     }
     var html = "";
     var lastPin = null;
@@ -470,7 +521,7 @@
       if (v.pin !== lastPin) {
         lastPin = v.pin;
         var meta = pinMeta(v.pin);
-        var selBtn = (view === "all")
+        var selBtn = (view === "all" && !query)
           ? '<button class="pin-sel-btn' + (allPinSelected(v.pin) ? ' all' : '') +
             '" data-pin-sel="' + v.pin + '">' + pinSelBtnLabel(v.pin) + '</button>'
           : '';
@@ -495,7 +546,7 @@
     var noTag = v.localNo + '<span class="g">#' + v.globalNo + '</span>';
     var lines = v.lines.map(function (ln, i) {
       var punc = (i === v.lines.length - 1) ? "。" : "，";
-      return '<span class="ln">' + ln + punc + '</span>';
+      return '<span class="ln">' + hlMatch(ln) + punc + '</span>';
     }).join("");
     var t = TIMINGS[v.id];
     var audioNote = t
@@ -547,6 +598,7 @@
     engine.looping = savedSeqLoop;
     renderToday();
     scrollToCurrent();
+    setHash(id);
     playCurrent();
   }
 
@@ -1066,6 +1118,8 @@
   // ---------- 视图切换 ----------
   function switchView(v) {
     view = v;
+    // 切到任一标签即退出搜索，让「全部颂 / 今日背诵」回归正常视图
+    if (query) { query = ""; var si = document.getElementById("searchInput"); if (si) si.value = ""; }
     document.querySelectorAll(".tab").forEach(function (t) { t.classList.toggle("active", t.dataset.view === v); });
     renderMain();
   }
@@ -1192,6 +1246,46 @@
     applyVol();
   });
 
+  // ---------- 搜索输入（防抖 150ms）----------
+  var searchTimer = null;
+  document.getElementById("searchInput").addEventListener("input", function (e) {
+    if (e && e.isComposing) return;   // 中文输入法组字中途不触发，避免拼音中间态闪「没有匹配」
+    var val = this.value.trim();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () { query = val; renderMain(); }, 150);
+  });
+
+  // ---------- 深链：#verse-<id> 可分享 / 书签定位到某颂 ----------
+  function setHash(id) {
+    try { history.replaceState(null, "", "#verse-" + id); }
+    catch (e) { location.hash = "verse-" + id; }
+  }
+  function gotoHash() {
+    var m = (location.hash || "").match(/^#verse-(.+)$/);
+    if (!m) return;
+    var id;
+    try { id = decodeURIComponent(m[1]); } catch (e) { return; }   // 容错坏的 %-转义
+    if (!Object.prototype.hasOwnProperty.call(byId, id)) return;   // 防原型键（constructor/toString 等）误命中
+    if (view !== "all" || query) switchView("all");
+    var el = document.getElementById("verse-" + id);
+    if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); }
+  }
+  window.addEventListener("hashchange", gotoHash);
+
+  // ---------- 键盘快捷键 ----------
+  // 空格=连播/暂停、← →=上/下颂、/=聚焦搜索。在输入框内不拦截（Esc 失焦）。
+  document.addEventListener("keydown", function (e) {
+    var tag = (e.target && e.target.tagName) || "";
+    var inField = tag === "INPUT" || tag === "TEXTAREA" || (e.target && e.target.isContentEditable);
+    if (e.key === "/" && !inField) {
+      e.preventDefault(); document.getElementById("searchInput").focus(); return;
+    }
+    if (inField) { if (e.key === "Escape") e.target.blur(); return; }
+    if (e.key === " " || e.code === "Space") { e.preventDefault(); onSeqPlay(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); seqStep(-1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); seqStep(1); }
+  });
+
   // ---------- 初始化 ----------
   bindMainDelegation(document.getElementById("mainList"));
   renderCatalog();
@@ -1199,6 +1293,7 @@
   renderToday();
   updateBadges();
   restoreLastPosition();
+  gotoHash();   // 若以 #verse-<id> 进入，定位到该颂
 })();
 </script>
 <script>
