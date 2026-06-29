@@ -361,6 +361,12 @@
     .col-right .player .pbtn.main { width: 46px; height: 46px; font-size: 16px; }
     .col-right .player .clear { font-size: 11px; margin-top: 4px; }
 
+    /* 练习栏按钮加大触摸目标（结束/露首字/全遮），手机上易点不误触 */
+    .train-bar { gap: 10px; }
+    .train-bar .train-exit, .train-bar .masksel button {
+      min-height: 40px; padding: 8px 16px; font-size: 14px;
+    }
+
     /* 颂卡片紧凑化：把"播放/循环"按钮放到一行 */
     .verse { padding: 12px 14px; gap: 10px; flex-wrap: wrap; }
     .verse .check { padding-top: 2px; }
@@ -956,10 +962,13 @@
   // 避免每次 renderMain 给数百张卡逐一 addEventListener。
   function bindMainDelegation(root) {
     root.addEventListener("click", function (e) {
-      if (e.target.id === "btnExitTrain") { switchView("all"); return; }     // 结束练习 → 回全部颂
-      if (e.target.id === "btnTrainMore") { startTrainSession(); return; }   // 再来一轮（SRS）
-      if (e.target.id === "btnFreePractice" || e.target.id === "btnPracticeToday") { startFreeSession(); return; }  // 自由练习勾选的
-      if (e.target.id === "btnTrainSearch") { freeSearch(); return; }        // 练搜索结果
+      // 用 closest 取最近的带 id 按钮（手机上 tap 落在按钮文字/内缘也认，比精确 e.target.id 容错）
+      var hbtn = e.target.closest("button[id]");
+      var hid = hbtn ? hbtn.id : "";
+      if (hid === "btnExitTrain") { switchView("all"); return; }     // 结束练习 → 回全部颂
+      if (hid === "btnTrainMore") { startTrainSession(); return; }   // 再来一轮（SRS）
+      if (hid === "btnFreePractice" || hid === "btnPracticeToday") { startFreeSession(); return; }  // 自由练习勾选的
+      if (hid === "btnTrainSearch") { freeSearch(); return; }        // 练搜索结果
       var jb = e.target.closest("[data-jie]");                               // 释义折叠（直接切换，不重渲染）
       if (jb && root.contains(jb)) {
         var box = document.querySelector('[data-jiebox="' + jb.getAttribute("data-jie") + '"]');
