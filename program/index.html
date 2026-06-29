@@ -188,6 +188,17 @@
     padding: 4px 12px; border-radius: 14px; font-size: 13px;
   }
   .train-bar .masksel button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* 本轮完成收尾面板 */
+  .train-done {
+    text-align: center; background: var(--paper); border: 1px solid var(--accent-soft);
+    border-radius: var(--radius); padding: 22px 20px; margin-bottom: 16px; box-shadow: var(--shadow);
+  }
+  .train-done .big { font-size: 19px; font-weight: 700; color: var(--accent); }
+  .train-done .sub { font-size: 14px; color: var(--ink); margin-top: 6px; }
+  .train-done .sub b { color: var(--accent); }
+  .train-done .sub2 { font-size: 13px; color: var(--ink-soft); margin-top: 12px; line-height: 1.8; }
+  .train-done .sub3 { font-size: 12px; color: var(--ink-soft); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .train-done #btnTrainMore { margin-top: 14px; }
   /* 遮挡的字：保留 CJK 字宽，显为灰块 */
   .verse .ln .mc { background: var(--line); color: transparent; border-radius: 3px; }
   /* 揭晓 / 评级按钮（占 .ops 位） */
@@ -688,6 +699,30 @@
         '<button data-mask="all" class="' + (maskLevel === "all" ? "on" : "") + '">全遮</button>' +
       '</span></div>';
   }
+  // 本轮全部评完后的收尾面板：小结 + 下一步（还有可练 → 再来一轮；否则今日练完的引导）
+  function trainDonePanel(doneN) {
+    var more = todaySession().ids.length;   // 一轮新 session 里还有多少可练（到期/新颂配额）
+    var html = '<div class="train-done">' +
+      '<div class="big">🎉 本轮完成</div>' +
+      '<div class="sub">这一轮练了 <b>' + doneN + '</b> 颂 · 已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</div>';
+    if (more > 0) {
+      html += '<button class="reveal-btn" id="btnTrainMore">再来一轮（还有 ' + more + ' 颂）</button>';
+    } else {
+      html += '<div class="sub2">今天的待练都清完了 🙏 明天再来复习巩固。<br>' +
+        '想今天多学新颂，可在设置调高「每日新颂上限」，或先去「全部颂 / 今日背诵」浏览。</div>';
+    }
+    html += '<div class="sub3">提示：每颂要多轮复习、间隔拉到 21 天以上才算「已熟」，一次「会了」是正常的第一步。</div>';
+    html += '</div>';
+    return html;
+  }
+  // 起一轮练习（进「练习」或点「再来一轮」都走这里）
+  function startTrainSession() {
+    sessionIds = todaySession().ids;
+    revealed = {}; graded = {}; relearning = {};
+    stopEngine();
+    renderMain();
+    var ml = document.getElementById("mainList"); if (ml) ml.scrollTop = 0;
+  }
   function renderMain() {
     var main = document.getElementById("mainList");
 
@@ -702,6 +737,8 @@
         return;
       }
       var th = maskBar();
+      var doneN = ids.filter(function (id) { return graded[id]; }).length;
+      if (doneN === ids.length) th += trainDonePanel(doneN);   // 本轮全部完成 → 收尾面板
       ids.forEach(function (id) { if (byId[id]) th += verseCard(byId[id]); });
       main.innerHTML = th;
       engine._lineCard = null; engine._lineKey = null;
@@ -810,6 +847,7 @@
   // 避免每次 renderMain 给数百张卡逐一 addEventListener。
   function bindMainDelegation(root) {
     root.addEventListener("click", function (e) {
+      if (e.target.id === "btnTrainMore") { startTrainSession(); return; }   // 再来一轮
       var b = e.target.closest("[data-play],[data-loop],[data-pin-sel],[data-reveal],[data-grade],[data-mask]");
       if (!b || !root.contains(b)) return;
       if (b.hasAttribute("data-play")) onSinglePlay(b.getAttribute("data-play"));
