@@ -159,6 +159,18 @@
      瞬间弹回整行宽、而背景还在淡出，导致「整行色条一闪」。 */
   .verse .lines .ln.active { background: var(--accent-soft); color: #fff; }
   .verse .meta { font-size: 12px; color: var(--ink-soft); margin-top: 6px; }
+  /* 科判路径 + 白话解 */
+  .verse .ke { font-size: 12px; color: var(--accent-soft); margin-bottom: 6px; letter-spacing: .5px; }
+  .verse .jie-wrap { margin-top: 8px; }
+  .verse .jie-toggle {
+    border: 1px solid var(--line); background: var(--paper); color: var(--ink-soft);
+    padding: 3px 12px; border-radius: 12px; font-size: 12px; cursor: pointer;
+  }
+  .verse .jie-toggle:hover { border-color: var(--accent-soft); color: var(--accent); }
+  .verse .jie {
+    margin-top: 8px; padding: 12px 14px; background: var(--accent-bg); border-radius: 8px;
+    font-size: 14px; line-height: 1.9; color: var(--ink);
+  }
   .verse .ops { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex-shrink: 0; }
   .op-btn {
     border: 1px solid var(--line); background: var(--paper); color: var(--ink);
@@ -449,6 +461,7 @@
 
 <script src="verses.js"></script>
 <script src="timings.js"></script>
+<script src="trans.js"></script>
 <script>
 (function () {
   "use strict";
@@ -481,6 +494,7 @@
   function applyVol() { audio.volume = vol; }
 
   var TIMINGS = window.TIMINGS || {};     // {id: {file, start, end}}，强制对齐结果
+  var TRANS = window.TRANS || {};         // {id: {jie 白话解, ke 科判路径}}，由 extract_trans.py 生成
   var audio = document.getElementById("audio");
   var AUDIO_BASE = "../600颂-单品/";
   // 浏览器支持 Opus 就用 .opus（约省 2/3 体积），否则回退 mp3。一次判定。
@@ -872,6 +886,7 @@
   }
   function pinMeta(pin) {
     if (pin === "序分") return "敬礼偈";
+    if (pin === "流通分") return "论末四颂";
     for (var i = 0; i < PIN_LIST.length; i++) if (PIN_LIST[i].name === pin)
       return "共 " + PIN_LIST[i].count + " 颂 · 🎵 " + PIN_LIST[i].audio;
     return "";
@@ -899,7 +914,15 @@
       return '<span class="ln">' + (isTrain ? ln : hlMatch(ln)) + punc + '</span>';
     }).join("");
     var t = TIMINGS[v.id];
-    var audioNote = t ? ('🎵 ' + fmt(t.start) + ' – ' + fmt(t.end) + ' · ' + t.file) : '⏳ 音频待对齐';
+    var audioNote = t ? ('🎵 ' + fmt(t.start) + ' – ' + fmt(t.end) + ' · ' + t.file) : '（无跟诵音频）';
+    var tr = TRANS[v.id] || {};
+    // 科判在遮罩自测时隐藏（避免给提示），揭晓/浏览态才显
+    var keHtml = (tr.ke && !showMasked) ? '<div class="ke">科判 · ' + escHtml(tr.ke) + '</div>' : '';
+    // 白话解：默认折叠，点「释义 ▾」展开（练习态也是手动展，不随揭晓自动显）
+    var jieHtml = tr.jie
+      ? '<div class="jie-wrap"><button class="jie-toggle" data-jie="' + v.id + '">释义 ▾</button>' +
+        '<div class="jie" data-jiebox="' + v.id + '" hidden>' + escHtml(tr.jie).replace(/\n/g, "<br>") + '</div></div>'
+      : '';
 
     var ops;
     if (isTrain) {
@@ -908,8 +931,10 @@
       else ops = '<button class="grade-btn forgot" data-grade="0" data-gid="' + v.id + '">忘了</button>' +
                  '<button class="grade-btn known" data-grade="1" data-gid="' + v.id + '">会了</button>';
     } else {
-      ops = '<button class="op-btn play" data-play="' + v.id + '">▶ 播放</button>' +
-            '<button class="op-btn loop" data-loop="' + v.id + '">🔁 循环</button>';
+      ops = t                                             // 无音频颂（流通分）不显播放
+        ? '<button class="op-btn play" data-play="' + v.id + '">▶ 播放</button>' +
+          '<button class="op-btn loop" data-loop="' + v.id + '">🔁 循环</button>'
+        : '';
     }
     var checkCol = isTrain ? '' :
       '<div class="check"><input type="checkbox" data-check="' + v.id + '" aria-label="选入今日背诵" ' + checked + '></div>';
@@ -919,8 +944,9 @@
         checkCol +
         '<div class="no-tag">' + noTag + '</div>' +
         '<div class="body">' +
+          keHtml +
           '<div class="lines">' + linesHtml + '</div>' +
-          '<div class="meta">' + audioNote + '</div>' + mtag +
+          '<div class="meta">' + audioNote + '</div>' + mtag + jieHtml +
         '</div>' +
         '<div class="ops">' + ops + '</div>' +
         '<div class="progress" data-prog="' + v.id + '"></div>' +
@@ -934,6 +960,12 @@
       if (e.target.id === "btnTrainMore") { startTrainSession(); return; }   // 再来一轮（SRS）
       if (e.target.id === "btnFreePractice" || e.target.id === "btnPracticeToday") { startFreeSession(); return; }  // 自由练习勾选的
       if (e.target.id === "btnTrainSearch") { freeSearch(); return; }        // 练搜索结果
+      var jb = e.target.closest("[data-jie]");                               // 释义折叠（直接切换，不重渲染）
+      if (jb && root.contains(jb)) {
+        var box = document.querySelector('[data-jiebox="' + jb.getAttribute("data-jie") + '"]');
+        if (box) { box.hidden = !box.hidden; jb.textContent = box.hidden ? "释义 ▾" : "释义 ▴"; }
+        return;
+      }
       var b = e.target.closest("[data-play],[data-loop],[data-pin-sel],[data-pin-train],[data-reveal],[data-grade],[data-mask]");
       if (!b || !root.contains(b)) return;
       if (b.hasAttribute("data-play")) onSinglePlay(b.getAttribute("data-play"));
@@ -954,7 +986,7 @@
   function onReveal(id) {
     revealed[id] = true;
     renderMain();             // 卡片显文 + 冒出 忘/会
-    onSinglePlay(id);         // 揭晓即放参考音自校
+    if (TIMINGS[id]) onSinglePlay(id);   // 有音频才放参考音自校（流通分无音频）
     var el = document.getElementById("verse-" + id);
     if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
   }
@@ -1219,9 +1251,10 @@
     var id = engine.queue[engine.index];
     saveLastPosition();
     var t = TIMINGS[id];
-    if (!t) {                                   // 该颂还没对齐时间戳
+    if (!t) {                                   // 该颂无音频时间戳（如流通分）
+      // 连播时跳到下一颂——但仅当队列里还有有音频的颂，否则全无音频会 advanceSeq↔playCurrent 死循环
+      if (engine.mode === "sequence" && engine.queue.some(hasTiming)) { advanceSeq(); return; }
       pulse(document.getElementById("nowPlaying"), "该颂尚无音频时间点");
-      if (engine.mode === "sequence") { advanceSeq(); return; }
       stopEngine(); return;
     }
     var doPlay = function () {
