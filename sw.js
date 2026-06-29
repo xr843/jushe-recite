@@ -22,6 +22,7 @@ const SHELL_ASSETS = [
   "/program/",
   "/program/verses.js",
   "/program/timings.js",
+  "/program/trans.js",
   "/manifest.json",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
