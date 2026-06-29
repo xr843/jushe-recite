@@ -11,7 +11,7 @@
 //
 // 逃生舱：设置里的「重置应用」会注销本 SW 并清空所有缓存。
 
-const SHELL_CACHE = "jushe-shell-v2"; // v2：废弃 v1 里会 308 的 /program/index.html、/index.html 缓存
+const SHELL_CACHE = "jushe-shell-v3"; // v3：主程序/样式抽成 app.js/app.css，需重新预缓存新壳
 const AUDIO_CACHE = "jushe-audio-v1"; // 跨 shell 升级保持不变，避免误删用户已下载的品
 
 const SHELL_ASSETS = [
@@ -20,6 +20,8 @@ const SHELL_ASSETS = [
   // 308 跳到 /program/，cache.add 跟随后存成 redirected 响应——而浏览器禁止 SW 把
   // redirected 响应用于「导航」，会 ERR_FAILED 打不开整个 PWA。所以这里用 "/program/"。
   "/program/",
+  "/program/app.css",
+  "/program/app.js",
   "/program/verses.js",
   "/program/timings.js",
   "/program/trans.js",

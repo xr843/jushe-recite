@@ -1,0 +1,1458 @@
+(function () {
+  "use strict";
+  if (typeof VERSES === "undefined") {
+    document.getElementById("mainList").innerHTML =
+      '<div class="empty-hint">未找到 verses.js 数据文件。<br>请先在 program/ 目录运行：python3 extract_verses.py</div>';
+    return;
+  }
+
+  // localStorage 安全写：配额满 / 隐私模式 / 被禁用时 setItem 会抛异常，
+  // 裹一层避免「评级/存设置」这类动作整个崩掉。失败返回 false（调用方可选提示）。
+  function safeSet(k, v) {
+    try { localStorage.setItem(k, v); return true; }
+    catch (e) { return false; }
+  }
+
+  // 全局错误兜底：任何未捕获异常/Promise 拒绝 → 顶部显一条提示+刷新，避免白屏且不动数据。
+  // 注：按钮用 JS 赋 onclick（非内联 on= 属性），严格 CSP 下也能用。
+  var _errShown = false;
+  function showFatalBanner() {
+    if (_errShown) return; _errShown = true;
+    var host = document.body || document.documentElement;
+    if (!host) return;
+    var b = document.createElement("div");
+    b.className = "fatal-banner";
+    b.innerHTML = '<span>出错了，但你的进度是安全的。刷新一下试试；若反复出现，去设置「重置应用」。</span>' +
+                  '<button type="button">刷新</button>';
+    b.querySelector("button").onclick = function () { location.reload(); };
+    host.appendChild(b);
+  }
+  // 必须用默认冒泡阶段（capture=false）：资源加载错误（audio/img 404 等）不冒泡到 window，
+  // 故只有真正未捕获的 JS 异常/Promise 拒绝才触发横幅。切勿改成 capture=true——会开始
+  // 捕获良性资源错误（如音频偶发加载失败，本就由音频元素自己的 error 处理器优雅处理），
+  // 导致每次小问题都弹"出错了"。
+  window.addEventListener("error", showFatalBanner);
+  window.addEventListener("unhandledrejection", showFatalBanner);
+
+  // ---------- 状态 ----------
+  var LS_SEL = "kusha_selected_v1";
+  var LS_RATE = "kusha_rate_v1";
+  var LS_VOL = "kusha_vol_v1";
+  var LS_LAST = "kusha_last_v1";          // 上次背到哪一颂的 id
+  var selected = loadSelected();          // Set of verse id（今日背诵）
+  var rate = parseFloat(localStorage.getItem(LS_RATE) || "1");
+  var vol = parseFloat(localStorage.getItem(LS_VOL) || "1");
+  if (!isFinite(vol)) vol = 1;
+  vol = Math.min(Math.max(vol, 0), 1);
+  var view = "all";          // all | today | train
+  var query = "";            // 搜索关键词（非空时主区显示全库匹配结果，命中处高亮）
+  var maskLevel = "first";   // 练习遮挡级别：first=露首字 / all=全遮
+  var revealed = {};         // 本次练习已揭晓的颂 id（内存态，切视图重置）
+  var graded = {};           // 本轮「会了」的颂 id（置灰=完成 + 推进）
+  var relearning = {};       // 本轮「忘了」的颂 id（已记一次 lapse，重练时不再重复扣 ease）
+  var sessionIds = null;     // 本轮练习的稳定队列（进练习时定一次，评级不抽走卡片）
+  var trainFree = false;     // 自由练习：练「今日背诵」勾选的全部、不受每日上限（区别于 SRS 复习）
+  var onlyUnmastered = false; // 「只看未背熟」筛选（all/today 视图）
+
+  function applyVol() { audio.volume = vol; }
+
+  var TIMINGS = window.TIMINGS || {};     // {id: {file, start, end}}，强制对齐结果
+  var TRANS = window.TRANS || {};         // {id: {jie 白话解, ke 科判路径}}，由 extract_trans.py 生成
+  var audio = document.getElementById("audio");
+  var AUDIO_BASE = "../600颂-单品/";
+  // 浏览器支持 Opus 就用 .opus（约省 2/3 体积），否则回退 mp3。一次判定。
+  var AUDIO_EXT = (function () {
+    try {
+      var probe = document.createElement("audio");
+      if (probe.canPlayType('audio/ogg; codecs="opus"') || probe.canPlayType("audio/opus")) return "opus";
+    } catch (e) {}
+    return "mp3";
+  })();
+  // TIMINGS 里存的是 .mp3 名；按浏览器支持换成最佳格式（opus/mp3）
+  function audioFile(name) { return AUDIO_EXT === "opus" ? name.replace(/\.mp3$/i, ".opus") : name; }
+
+  // 播放引擎状态（真实音频）
+  var engine = {
+    mode: null,        // 'single' | 'sequence'
+    queue: [],         // verse id 数组
+    index: 0,          // 当前播放在 queue 中的位置
+    looping: false,    // single: 单曲循环；sequence: 列表循环
+    paused: false,     // sequence 暂停态（保留 queue/index，下次续播）
+    curFile: null,     // 当前已载入 audio 的 mp3 文件名
+    timer: null,       // 进度/结束轮询 interval（truthy 即表示正在播放）
+    _lineCard: null,   // 当前高亮句所在的卡片（逐句高亮去抖用）
+    _lineKey: null     // "id:句序" 去抖键：只在换句时碰 DOM
+  };
+
+  var byId = {};
+  VERSES.forEach(function (v) { byId[v.id] = v; });
+  // 全局顺序（按 globalNo）：练习自动喂新颂、勾选不足时按这个顺序补
+  var VERSES_ORDERED = VERSES.slice().sort(function (a, b) { return a.globalNo - b.globalNo; });
+
+  // ---------- 工具 ----------
+  function loadSelected() {
+    try { return new Set(JSON.parse(localStorage.getItem(LS_SEL) || "[]")); }
+    catch (e) { return new Set(); }
+  }
+  function saveSelected() { safeSet(LS_SEL, JSON.stringify(Array.from(selected))); }
+  function selectedOrdered() {
+    // 按 globalNo 排序的已选颂
+    return VERSES.filter(function (v) { return selected.has(v.id); })
+                 .sort(function (a, b) { return a.globalNo - b.globalNo; });
+  }
+
+  // ---------- SRS 背诵训练（数据层 + 调度）----------
+  // 每颂一张卡 {ease,interval,reps,lapses,due,last}；无卡=未学。SM-2-lite：无 Hard、无
+  // ML、无后端。忘→当场重来+ease 降；会→ease 升、间隔增长。规避 ease hell：ease 有地板
+  // 1.3 且靠"会"回升(+0.05)。每日新颂上限防复习雪崩。新颂从「今日背诵」选择引入。
+  var LS_SRS = "kusha_srs_v1";
+  var DAY = 864e5;
+  var MASTER_DAYS = 21;   // interval ≥ 21 天算「已熟」(Anki mature 惯例)
+  function loadSRS() {
+    var d;
+    try { d = JSON.parse(localStorage.getItem(LS_SRS) || "null"); } catch (e) { d = null; }
+    if (!d || d.v !== 1) d = { v: 1, settings: { newPerDay: 6 }, daily: {}, cards: {} };
+    if (!d.settings || typeof d.settings.newPerDay !== "number") d.settings = { newPerDay: 6 };
+    if (!d.daily) d.daily = {};
+    if (!d.cards) d.cards = {};
+    return d;
+  }
+  var srs = loadSRS();
+  function saveSRS() { safeSet(LS_SRS, JSON.stringify(srs)); }
+  function todayStr() { var dt = new Date(); return dt.getFullYear() + "-" + (dt.getMonth() + 1) + "-" + dt.getDate(); }
+  function rollDaily() { if (srs.daily.date !== todayStr()) srs.daily = { date: todayStr(), newDone: 0 }; }
+  function srsCard(id) { return srs.cards[id] || null; }
+  // 评级：0=忘 1=会（保留 2=易 备扩展，二态 UI 只用 0/1）
+  function reviewCard(id, grade) {
+    rollDaily();
+    var now = Date.now();
+    var c = srs.cards[id];
+    var isNew = !c;
+    if (isNew) c = { ease: 2.5, interval: 0, reps: 0, lapses: 0, due: 0, last: 0 };
+    if (grade === 0) {                         // 忘
+      c.lapses++; c.reps = 0; c.interval = 0;
+      c.ease = Math.max(1.3, c.ease - 0.2);
+      c.due = now + 6e5;                        // 10 分钟后本轮再出
+    } else {                                    // 会（或易）
+      c.reps++;
+      c.ease = Math.min(3.0, c.ease + (grade === 2 ? 0.15 : 0.05));
+      if (c.reps === 1) c.interval = grade === 2 ? 4 : 1;
+      else if (c.reps === 2) c.interval = 6;
+      else c.interval = Math.ceil(c.interval * c.ease);
+      c.due = now + c.interval * DAY;
+    }
+    c.last = now;
+    srs.cards[id] = c;
+    if (isNew) srs.daily.newDone = (srs.daily.newDone || 0) + 1;   // 新颂引入计数（受上限约束）
+    saveSRS();
+    return c;
+  }
+  function masteryOf(id) {
+    var c = srs.cards[id];
+    if (!c) return "new";                       // 未学
+    if (c.interval >= MASTER_DAYS) return "mastered";
+    return "learning";
+  }
+  // 今日训练队列：到期复习 + （受每日上限约束的）新颂；复习在前、新颂在后。
+  function todaySession() {
+    rollDaily();
+    var now = Date.now();
+    var due = [];
+    for (var id in srs.cards) {
+      if (srs.cards.hasOwnProperty(id) && byId[id] && srs.cards[id].due <= now) due.push(id);
+    }
+    due.sort(function (a, b) { return srs.cards[a].due - srs.cards[b].due; });
+    var quota = Math.max(0, srs.settings.newPerDay - (srs.daily.newDone || 0));
+    var news = [], pick = {};
+    if (quota > 0) {
+      // 新颂来源：① 先取「今日背诵」勾选的未学颂；② 不够则按全局顺序补未学颂
+      // —— 这样不用先手动勾选，点开「练习」就有得练；勾选的会被优先安排。
+      selectedOrdered().forEach(function (v) {
+        if (news.length < quota && !srs.cards[v.id] && !pick[v.id]) { news.push(v.id); pick[v.id] = 1; }
+      });
+      for (var k = 0; k < VERSES_ORDERED.length && news.length < quota; k++) {
+        var vv = VERSES_ORDERED[k];
+        if (!srs.cards[vv.id] && !pick[vv.id]) { news.push(vv.id); pick[vv.id] = 1; }
+      }
+    }
+    var seen = {}, out = [];
+    due.concat(news).forEach(function (id) { if (!seen[id]) { seen[id] = 1; out.push(id); } });
+    return { ids: out, dueCount: due.length, newCount: news.length };
+  }
+  function masteredCount() {
+    var n = 0;
+    for (var id in srs.cards) if (srs.cards.hasOwnProperty(id) && byId[id] && masteryOf(id) === "mastered") n++;
+    return n;
+  }
+
+  function pinLabel(v) { return v.pin.replace("品", "").replace("分", "") + v.localNo; }
+  function fmt(sec) { var m = Math.floor(sec / 60), s = Math.floor(sec % 60); return m + ":" + (s < 10 ? "0" : "") + s; }
+
+  // 逐句时间：优先用强制对齐产出的真·句界（timings.js 里若带 lines 字段，
+  // 由升级后的 align.py + build_timings.py 生成）；没有就用整颂 [start,end]
+  // 按每句字数比例插值。念诵节奏较匀，插值对「当前念到第几句」已足够。
+  function getLineTimings(v, t) {
+    if (!t) return null;
+    if (t.lines && t.lines.length === v.lines.length) return t.lines;
+    var total = 0;
+    v.lines.forEach(function (l) { total += l.length; });
+    if (!total) return null;
+    var span = Math.max(t.end - t.start, 0.01);
+    var out = [], acc = 0;
+    for (var i = 0; i < v.lines.length; i++) {
+      var s = t.start + span * (acc / total);
+      acc += v.lines[i].length;
+      out.push({ start: s, end: t.start + span * (acc / total) });
+    }
+    return out;
+  }
+
+  // ---------- 搜索 ----------
+  function matchesQuery(v) {
+    if (!query) return true;
+    for (var i = 0; i < v.lines.length; i++) {
+      if (v.lines[i].indexOf(query) >= 0) return true;
+    }
+    return false;
+  }
+  // 命中高亮：把行内匹配子串包 <mark>。行文本来自可信数据，只对可信文本切片
+  // 做包裹，绝不把用户输入注入 HTML，安全。
+  function hlMatch(text) {
+    if (!query) return text;
+    var idx = text.indexOf(query);
+    if (idx < 0) return text;
+    var out = "", from = 0;
+    while (idx >= 0) {
+      out += text.slice(from, idx) + "<mark>" + text.slice(idx, idx + query.length) + "</mark>";
+      from = idx + query.length;
+      idx = text.indexOf(query, from);
+    }
+    return out + text.slice(from);
+  }
+
+  // ---------- 渲染：左栏目录 ----------
+  function renderCatalog() {
+    var groups = {};
+    var order = [];
+    VERSES.forEach(function (v) {
+      if (!groups[v.pin]) { groups[v.pin] = []; order.push(v.pin); }
+      groups[v.pin].push(v);
+    });
+    var html = "";
+    order.forEach(function (pin, gi) {
+      var items = groups[pin];
+      // 默认全部折叠（之前会自动展开第一组「序分」，用户不需要）
+      html += '<div class="pin-group" data-pin="' + pin + '">';
+      html += '  <div class="pin-head"><span class="arrow">▶</span>' + pin +
+              '<span class="count">' + items.length + '</span></div>';
+      html += '  <div class="pin-items">';
+      items.forEach(function (v) {
+        html += '<div class="pin-item" data-goto="' + v.id + '"><span class="no">' + v.localNo + '</span>' +
+                '<span>' + v.lines[0] + '…</span></div>';
+      });
+      html += '  </div></div>';
+    });
+    var cat = document.getElementById("catalog");
+    cat.innerHTML = html;
+    cat.querySelectorAll(".pin-head").forEach(function (h) {
+      h.addEventListener("click", function () {
+        h.parentNode.classList.toggle("open");
+        if (view !== "all" || query) switchView("all");
+        var pin = h.parentNode.dataset.pin;
+        var el = document.getElementById("pintitle-" + pin);
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+        closeMobileDrawer();
+      });
+    });
+    cat.querySelectorAll(".pin-item").forEach(function (it) {
+      it.addEventListener("click", function () {
+        if (view !== "all" || query) { switchView("all"); }
+        var el = document.getElementById("verse-" + it.dataset.goto);
+        if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); setHash(it.dataset.goto); }
+        closeMobileDrawer();
+      });
+    });
+  }
+  function flash(el) {
+    el.style.transition = "box-shadow .2s"; el.style.boxShadow = "0 0 0 3px var(--accent-soft)";
+    setTimeout(function () { el.style.boxShadow = ""; }, 700);
+  }
+
+  // ---------- 渲染：主区颂列表 ----------
+  function escHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  // all/today 视图顶部：只看未熟筛选 + 已熟进度
+  function listHead() {
+    if (query) return "";
+    // 今日背诵视图：一键自由练习勾选的全部（不受每日上限）—— 直接答「如何选择练习题」
+    var practiceBtn = (view === "today" && selected.size)
+      ? '<button class="practice-now" id="btnPracticeToday">▶ 练习这 ' + selected.size + ' 颂</button>'
+      : '';
+    return '<div class="list-head">' + practiceBtn +
+      '<label><input type="checkbox" id="filterUnmastered"' + (onlyUnmastered ? " checked" : "") + '> 只看未背熟</label>' +
+      '<span class="prog">已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</span>' +
+      '</div>';
+  }
+  function maskBar() {
+    var ids = sessionIds || [];
+    var doneN = ids.filter(function (id) { return graded[id]; }).length;
+    return '<div class="train-bar">' +
+      '<button class="train-exit" id="btnExitTrain" title="结束练习（Esc）">‹ 结束</button>' +
+      '<span class="stat">' + (trainFree ? '自由练习 · ' : '') + '本轮 <b>' + doneN + '</b> / ' + ids.length +
+        (ids.length && doneN === ids.length ? ' · 完成 🎉' : '') + '</span>' +
+      '<span class="stat">已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</span>' +
+      '<span class="spacer"></span>' +
+      '<span class="masksel">' +
+        '<button data-mask="first" class="' + (maskLevel === "first" ? "on" : "") + '">露首字</button>' +
+        '<button data-mask="all" class="' + (maskLevel === "all" ? "on" : "") + '">全遮</button>' +
+      '</span></div>';
+  }
+  // 本轮全部评完后的收尾面板：小结 + 下一步
+  function trainDonePanel(doneN) {
+    var html = '<div class="train-done">' +
+      '<div class="big">🎉 本轮完成</div>' +
+      '<div class="sub">这一轮练了 <b>' + doneN + '</b> 颂 · 已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</div>';
+    if (trainFree) {                            // 自由练习：再练一遍同一批
+      html += '<button class="reveal-btn" id="btnFreePractice">▶ 再练一遍这 ' + (sessionIds || []).length + ' 颂</button>';
+    } else {
+      var more = todaySession().ids.length;    // SRS：还有多少到期/新颂可练
+      if (more > 0) html += '<button class="reveal-btn" id="btnTrainMore">再来一轮（还有 ' + more + ' 颂）</button>';
+      else html += '<div class="sub2">今天的待练都清完了 🙏 明天再来复习巩固。<br>' +
+        '想今天多学新颂，可在设置调高「每日新颂上限」，或先去「全部颂 / 今日背诵」浏览。</div>';
+    }
+    html += '<div class="sub3">提示：每颂要多轮复习、间隔拉到 21 天以上才算「已熟」，一次「会了」是正常的第一步。</div>';
+    html += '</div>';
+    return html;
+  }
+  // 练习区为空时的面板：区分「今天练完」与「全部学过」，都是正向收尾。
+  function trainEmptyPanel() {
+    var anyUnstudied = false;
+    for (var i = 0; i < VERSES.length; i++) { if (!srs.cards[VERSES[i].id]) { anyUnstudied = true; break; } }
+    var html = '<div class="train-done"><div class="big">';
+    if (!anyUnstudied) {
+      html += '全部学过啦 🎉</div><div class="sub2">' + VERSES.length + ' 颂都进了复习池。<br>到期要复习的会自动出现在这里。</div>';
+    } else {
+      html += '今天练完了 🎉</div><div class="sub2">到期复习清空、今天的新颂也学完了。<br>' +
+        '明天再来复习，记忆才扎实。<br>想今天多学，去设置调高「每日新颂上限」。</div>';
+    }
+    // 想继续 → 自由练习勾选的（不受每日上限）
+    var selN = selectedOrdered().length;
+    if (selN) {
+      html += '<button class="reveal-btn" id="btnFreePractice">▶ 自由练习勾选的 ' + selN + ' 颂</button>' +
+        '<div class="sub3">自由练习不受每日上限，练你「今日背诵」勾选的偈颂；评级照样计入复习。</div>';
+    }
+    return html + '</div>';
+  }
+  // 起一轮 SRS 复习（进「练习」标签 / 点「再来一轮」）
+  function startTrainSession() {
+    trainFree = false;
+    sessionIds = todaySession().ids;
+    revealed = {}; graded = {}; relearning = {};
+    stopEngine();
+    renderMain();
+    var ml = document.getElementById("mainList"); if (ml) ml.scrollTop = 0;
+  }
+  // 自由练习：练「今日背诵」勾选的全部，不受每日上限（评级照样更新 SRS）
+  // 通用自由练习：直接练给定的一组颂（品 / 搜索结果 / 今日背诵选择），不受每日上限
+  function startFreePractice(ids) {
+    if (!ids || !ids.length) return;
+    view = "train"; trainFree = true;
+    sessionIds = ids.slice(); revealed = {}; graded = {}; relearning = {};
+    stopEngine();
+    document.querySelectorAll(".tab").forEach(function (t) { t.classList.toggle("active", t.dataset.view === "train"); });
+    renderMain();
+    var ml = document.getElementById("mainList"); if (ml) ml.scrollTop = 0;
+  }
+  function startFreeSession() {            // 从「今日背诵」勾选起
+    var ids = selectedOrdered().map(function (v) { return v.id; });
+    if (!ids.length) { switchView("today"); return; }
+    startFreePractice(ids);
+  }
+  function freePin(pin) {                  // 练整品
+    startFreePractice(versesInPin(pin).map(function (v) { return v.id; }));
+  }
+  function freeSearch() {                  // 练搜索结果
+    startFreePractice(VERSES.filter(matchesQuery).map(function (v) { return v.id; }));
+  }
+  function renderMain() {
+    var main = document.getElementById("mainList");
+
+    // ---- 练习视图：本轮稳定队列（到期复习 + 受限新颂），遮罩自测 ----
+    if (view === "train") {
+      var ids = sessionIds || [];
+      if (ids.length === 0) {
+        main.innerHTML = maskBar() + trainEmptyPanel();
+        engine._lineCard = null; engine._lineKey = null;
+        return;
+      }
+      var th = maskBar();
+      var doneN = ids.filter(function (id) { return graded[id]; }).length;
+      if (Object.keys(srs.cards).length === 0 && doneN === 0) {   // 首次练习：教一下流程
+        th += '<div class="train-tip">遮住正文凭记忆背 → 点「揭晓」对答案 → 评「忘了 / 会了」；系统按遗忘曲线帮你安排复习。</div>';
+      }
+      if (doneN === ids.length) th += trainDonePanel(doneN);   // 本轮全部完成 → 收尾面板
+      ids.forEach(function (id) { if (byId[id]) th += verseCard(byId[id]); });
+      main.innerHTML = th;
+      engine._lineCard = null; engine._lineKey = null;
+      syncPlayingUI();
+      return;
+    }
+
+    // ---- 搜索 / 全部 / 今日 ----
+    var list;
+    if (query) {
+      list = VERSES.filter(matchesQuery);
+      if (list.length === 0) {
+        main.innerHTML = '<div class="empty-hint">没有匹配「' + escHtml(query) + '」的偈颂。</div>';
+        engine._lineCard = null; engine._lineKey = null;
+        return;
+      }
+    } else {
+      if (view === "today" && selectedOrdered().length === 0) {
+        main.innerHTML = listHead() + '<div class="empty-hint">今日背诵列表为空。<br>切到「全部颂」勾选你今天要背的偈颂吧。</div>';
+        return;
+      }
+      list = view === "all" ? VERSES : selectedOrdered();
+      if (onlyUnmastered) list = list.filter(function (v) { return masteryOf(v.id) !== "mastered"; });
+      if (list.length === 0) {
+        main.innerHTML = listHead() + '<div class="empty-hint">这里没有未背熟的颂了 🎉</div>';
+        return;
+      }
+    }
+    // 搜索结果：一键练这些匹配的颂（直接选练习内容的第二条途径）
+    var html = query
+      ? '<div class="list-head"><button class="practice-now" id="btnTrainSearch">▶ 练习这 ' + list.length + ' 条结果</button></div>'
+      : listHead();
+    var lastPin = null;
+    list.forEach(function (v) {
+      if (v.pin !== lastPin) {
+        lastPin = v.pin;
+        var meta = pinMeta(v.pin);
+        // 全部颂里每品两个动作：「只背本品」(选入今日背诵) +「▶ 练本品」(直接练整品)
+        var pinBtns = (view === "all" && !query)
+          ? '<button class="pin-sel-btn' + (allPinSelected(v.pin) ? ' all' : '') +
+              '" data-pin-sel="' + v.pin + '">' + pinSelBtnLabel(v.pin) + '</button>' +
+            '<button class="pin-train-btn" data-pin-train="' + v.pin + '">▶ 练本品</button>'
+          : '';
+        html += '<div class="pin-title" id="pintitle-' + v.pin + '">' + v.pin +
+                (meta ? '<span class="sub">' + meta + '</span>' : '') + pinBtns + '</div>';
+      }
+      html += verseCard(v);
+    });
+    main.innerHTML = html;
+    // 卡片重建后，正在播的逐句高亮 DOM 引用已失效；重置去抖键让下一个 tick 重新上色
+    engine._lineCard = null; engine._lineKey = null;
+    syncPlayingUI();
+  }
+  function pinMeta(pin) {
+    if (pin === "序分") return "敬礼偈";
+    if (pin === "流通分") return "论末四颂";
+    for (var i = 0; i < PIN_LIST.length; i++) if (PIN_LIST[i].name === pin)
+      return "共 " + PIN_LIST[i].count + " 颂 · 🎵 " + PIN_LIST[i].audio;
+    return "";
+  }
+  // 遮挡正文：first=每句留首字、其余显灰块；all=整句灰块。标点保留作位置线索。
+  function maskedLines(v) {
+    return v.lines.map(function (ln, i) {
+      var punc = (i === v.lines.length - 1) ? "。" : "，";
+      var chars = ln.split("").map(function (ch, j) {
+        return (maskLevel === "first" && j === 0) ? ch : '<span class="mc">' + ch + '</span>';
+      }).join("");
+      return '<span class="ln">' + chars + punc + '</span>';
+    }).join("");
+  }
+  function verseCard(v) {
+    var isTrain = view === "train";
+    var checked = selected.has(v.id) ? "checked" : "";
+    var noTag = v.localNo + '<span class="g">#' + v.globalNo + '</span>';
+    var m = masteryOf(v.id);
+    // 只在「已背熟」时挂标签（成就信号）；未学/学习中不显，避免今日背诵里满屏同样的「学习中」噪音
+    var mtag = (!isTrain && m === "mastered") ? '<div class="mtag mastered">已背熟 ✓</div>' : '';
+    var showMasked = isTrain && !revealed[v.id];
+    var linesHtml = showMasked ? maskedLines(v) : v.lines.map(function (ln, i) {
+      var punc = (i === v.lines.length - 1) ? "。" : "，";
+      return '<span class="ln">' + (isTrain ? ln : hlMatch(ln)) + punc + '</span>';
+    }).join("");
+    var t = TIMINGS[v.id];
+    var audioNote = t ? ('🎵 ' + fmt(t.start) + ' – ' + fmt(t.end) + ' · ' + t.file) : '（无跟诵音频）';
+    var tr = TRANS[v.id] || {};
+    // 科判在遮罩自测时隐藏（避免给提示），揭晓/浏览态才显
+    var keHtml = (tr.ke && !showMasked) ? '<div class="ke">科判 · ' + escHtml(tr.ke) + '</div>' : '';
+    // 白话解：默认折叠，点「释义 ▾」展开（练习态也是手动展，不随揭晓自动显）
+    var jieHtml = tr.jie
+      ? '<div class="jie-wrap"><button class="jie-toggle" data-jie="' + v.id + '">释义 ▾</button>' +
+        '<div class="jie" data-jiebox="' + v.id + '" hidden>' + escHtml(tr.jie).replace(/\n/g, "<br>") + '</div></div>'
+      : '';
+
+    var ops;
+    if (isTrain) {
+      if (graded[v.id]) ops = '';                         // 已评级 → 置灰无操作
+      else if (!revealed[v.id]) ops = '<button class="reveal-btn" data-reveal="' + v.id + '">揭晓</button>';
+      else ops = '<button class="grade-btn forgot" data-grade="0" data-gid="' + v.id + '">忘了</button>' +
+                 '<button class="grade-btn known" data-grade="1" data-gid="' + v.id + '">会了</button>';
+    } else {
+      ops = t                                             // 无音频颂（流通分）不显播放
+        ? '<button class="op-btn play" data-play="' + v.id + '">▶ 播放</button>' +
+          '<button class="op-btn loop" data-loop="' + v.id + '">🔁 循环</button>'
+        : '';
+    }
+    var checkCol = isTrain ? '' :
+      '<div class="check"><input type="checkbox" data-check="' + v.id + '" aria-label="选入今日背诵" ' + checked + '></div>';
+
+    return '' +
+      '<div class="verse' + (isTrain && graded[v.id] ? ' done' : '') + '" id="verse-' + v.id + '" data-id="' + v.id + '">' +
+        checkCol +
+        '<div class="no-tag">' + noTag + '</div>' +
+        '<div class="body">' +
+          keHtml +
+          '<div class="lines">' + linesHtml + '</div>' +
+          '<div class="meta">' + audioNote + '</div>' + mtag + jieHtml +
+        '</div>' +
+        '<div class="ops">' + ops + '</div>' +
+        '<div class="progress" data-prog="' + v.id + '"></div>' +
+      '</div>';
+  }
+  // 事件委托：#mainList 内容随渲染频繁重建，把监听挂在稳定的容器上（一次绑定），
+  // 避免每次 renderMain 给数百张卡逐一 addEventListener。
+  function bindMainDelegation(root) {
+    root.addEventListener("click", function (e) {
+      // 用 closest 取最近的带 id 按钮（手机上 tap 落在按钮文字/内缘也认，比精确 e.target.id 容错）
+      var hbtn = e.target.closest("button[id]");
+      var hid = hbtn ? hbtn.id : "";
+      if (hid === "btnExitTrain") { switchView("all"); return; }     // 结束练习 → 回全部颂
+      if (hid === "btnTrainMore") { startTrainSession(); return; }   // 再来一轮（SRS）
+      if (hid === "btnFreePractice" || hid === "btnPracticeToday") { startFreeSession(); return; }  // 自由练习勾选的
+      if (hid === "btnTrainSearch") { freeSearch(); return; }        // 练搜索结果
+      var jb = e.target.closest("[data-jie]");                               // 释义折叠（直接切换，不重渲染）
+      if (jb && root.contains(jb)) {
+        var box = document.querySelector('[data-jiebox="' + jb.getAttribute("data-jie") + '"]');
+        if (box) { box.hidden = !box.hidden; jb.textContent = box.hidden ? "释义 ▾" : "释义 ▴"; }
+        return;
+      }
+      var b = e.target.closest("[data-play],[data-loop],[data-pin-sel],[data-pin-train],[data-reveal],[data-grade],[data-mask]");
+      if (!b || !root.contains(b)) return;
+      if (b.hasAttribute("data-play")) onSinglePlay(b.getAttribute("data-play"));
+      else if (b.hasAttribute("data-loop")) onSingleLoopToggle(b.getAttribute("data-loop"));
+      else if (b.hasAttribute("data-pin-sel")) togglePinSelect(b.getAttribute("data-pin-sel"));
+      else if (b.hasAttribute("data-pin-train")) freePin(b.getAttribute("data-pin-train"));
+      else if (b.hasAttribute("data-reveal")) onReveal(b.getAttribute("data-reveal"));
+      else if (b.hasAttribute("data-grade")) onGrade(b.getAttribute("data-gid"), parseInt(b.getAttribute("data-grade"), 10));
+      else if (b.hasAttribute("data-mask")) setMask(b.getAttribute("data-mask"));
+    });
+    root.addEventListener("change", function (e) {
+      var cb = e.target.closest("[data-check]");
+      if (cb && root.contains(cb)) { toggleSelect(cb.getAttribute("data-check"), cb.checked); return; }
+      if (e.target.id === "filterUnmastered") { onlyUnmastered = e.target.checked; renderMain(); }
+    });
+  }
+  // ---------- 练习交互 ----------
+  function onReveal(id) {
+    revealed[id] = true;
+    renderMain();             // 卡片显文 + 冒出 忘/会
+    if (TIMINGS[id]) onSinglePlay(id);   // 有音频才放参考音自校（流通分无音频）
+    var el = document.getElementById("verse-" + id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function onGrade(id, grade) {
+    if (engine.mode === "single") stopEngine();      // 停掉自校音
+    if (grade === 0) {
+      // 忘了：本轮重新遮罩、当场再练；lapse 同一卡本轮只记一次（避免重练时 ease 连降）
+      if (!relearning[id]) { reviewCard(id, 0); relearning[id] = true; }
+      revealed[id] = false;
+    } else {
+      reviewCard(id, 1);                             // 会了：调度 + 本轮完成
+      graded[id] = true;
+      delete relearning[id];
+    }
+    updateBadges();
+    renderMain();                                    // 刷新遮罩/置灰/本轮计数
+    var next = document.querySelector(".verse:not(.done)");   // 推进到下一个未完成
+    if (next) next.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function setMask(level) { maskLevel = level; renderMain(); }
+
+  // 点击右栏列表中某颂 → 跳到那颂并立即播放
+  function jumpToVerse(id) {
+    if (!selected.has(id)) return;
+    var list = selectedOrdered();
+    if (!list.length) return;
+    var ids = list.map(function (v) { return v.id; });
+    var idx = ids.indexOf(id);
+    if (idx < 0) return;
+    engine.mode = "sequence";
+    engine.queue = ids;
+    engine.index = idx;
+    engine.paused = false;
+    engine.looping = savedSeqLoop;
+    renderToday();
+    scrollToCurrent();
+    setHash(id);
+    playCurrent();
+  }
+
+  // 上次背到哪一颂：在 engine.index 变化时记录，下次刷新自动恢复
+  function saveLastPosition() {
+    if (engine.mode === "sequence" && engine.queue.length > 0) {
+      var id = engine.queue[engine.index];
+      if (id) safeSet(LS_LAST, id);
+    }
+  }
+  function clearLastPosition() { localStorage.removeItem(LS_LAST); }
+  function restoreLastPosition() {
+    var savedId = localStorage.getItem(LS_LAST);
+    if (!savedId || !selected.has(savedId)) return;
+    var list = selectedOrdered();
+    if (!list.length) return;
+    var ids = list.map(function (v) { return v.id; });
+    var idx = ids.indexOf(savedId);
+    if (idx < 0) return;
+    engine.mode = "sequence";
+    engine.queue = ids;
+    engine.index = idx;
+    engine.paused = true;
+    engine.looping = savedSeqLoop;
+    renderToday();
+    syncPlayingUI();
+  }
+
+  // 本品全选 / 取消本品
+  function versesInPin(pin) {
+    return VERSES.filter(function (v) { return v.pin === pin; });
+  }
+  function allPinSelected(pin) {
+    var vs = versesInPin(pin);
+    if (!vs.length) return false;
+    return vs.every(function (v) { return selected.has(v.id); });
+  }
+  function pinSelBtnLabel(pin) {
+    return allPinSelected(pin) ? "☑ 取消本品" : "☐ 只背本品";
+  }
+  function refreshPinSelButtons() {
+    document.querySelectorAll("[data-pin-sel]").forEach(function (b) {
+      var p = b.dataset.pinSel;
+      var all = allPinSelected(p);
+      b.textContent = pinSelBtnLabel(p);
+      b.classList.toggle("all", all);
+    });
+  }
+  function togglePinSelect(pin) {
+    var vs = versesInPin(pin);
+    var allSel = allPinSelected(pin);
+    if (allSel) {
+      // 取消本品：只移除本品的勾选，保留其他品
+      vs.forEach(function (v) { selected.delete(v.id); });
+    } else {
+      // 只背本品：清空所有勾选，再勾本品全部（语义=替换）
+      selected.clear();
+      stopEngine();
+      vs.forEach(function (v) { selected.add(v.id); });
+    }
+    saveSelected();
+    // 全量同步 checkbox（因为可能清掉了其他品）
+    document.querySelectorAll("[data-check]").forEach(function (cb) {
+      cb.checked = selected.has(cb.dataset.check);
+    });
+    refreshPinSelButtons();
+    renderToday();
+    updateBadges();
+    if (view === "today") renderMain();
+    syncQueueToSelection();
+  }
+
+  // ---------- 今日背诵选择 ----------
+  function toggleSelect(id, on) {
+    if (on) selected.add(id); else selected.delete(id);
+    saveSelected(); renderToday(); updateBadges();
+    if (view === "today") renderMain();
+    else refreshPinSelButtons();
+    syncQueueToSelection();
+  }
+
+  // 选择变化时把 engine.queue 同步到当前 selectedOrdered()，
+  // 让正在播 / 已暂停的连播立刻看到新列表（数量、顺序、剔除）。
+  function syncQueueToSelection() {
+    if (engine.mode !== "sequence") return;
+    var newQueue = selectedOrdered().map(function (v) { return v.id; });
+    if (newQueue.length === 0) { stopEngine(); return; }
+    var oldId = engine.queue[engine.index];
+    var newIdx = newQueue.indexOf(oldId);
+    if (newIdx >= 0) {
+      // 当前颂仍在新列表里 → 平滑更新 queue/index，不打断播放
+      engine.queue = newQueue;
+      engine.index = newIdx;
+      syncPlayingUI();
+      return;
+    }
+    // 当前颂被移除：按 globalNo 找新列表里"该插在哪个位置"，
+    // 然后将游标停在那个位置的前一颗（这样下次按 ▶/⏭ 行为可预期）。
+    // 重要：正在播也不强行 seek 到别处，避免给用户造成"莫名其妙跳回第一颗"的错觉。
+    var oldGno = (oldId && byId[oldId]) ? byId[oldId].globalNo : -1;
+    var insertPos = newQueue.length;
+    for (var j = 0; j < newQueue.length; j++) {
+      if (byId[newQueue[j]].globalNo > oldGno) { insertPos = j; break; }
+    }
+    var wasPlaying = !!engine.timer;
+    engine.queue = newQueue;
+    engine.index = Math.max(0, insertPos - 1);  // 停在"刚刚被移除颂"的相邻位置
+    if (wasPlaying) {
+      // 把正在播的音频停掉，让 UI 状态切回"已暂停"。用户主动按 ▶ 才会续播。
+      if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+      audio.pause();
+      engine.paused = true;
+    }
+    syncPlayingUI();
+  }
+  function updateBadges() {
+    document.getElementById("tabBadge").textContent = selected.size;
+    document.getElementById("selCount").textContent = "已选 " + selected.size + " 颂";
+    var tb = document.getElementById("trainBadge");
+    if (tb) tb.textContent = todaySession().ids.length;   // 今日待练数
+  }
+  function renderToday() {
+    var list = selectedOrdered();
+    var box = document.getElementById("todayList");
+    if (list.length === 0) {
+      box.innerHTML = '<div class="today-empty">还没有选颂。<br>在「全部颂」里勾选<br>今天要背的偈颂。</div>';
+      return;
+    }
+    var html = "";
+    list.forEach(function (v, i) {
+      var cur = (engine.mode === "sequence" && engine.queue[engine.index] === v.id) ? "current" : "";
+      html += '<div class="today-item ' + cur + '" data-tid="' + v.id + '">' +
+                '<span class="seq">' + (i + 1) + '</span>' +
+                '<span class="label">' + pinLabel(v) + '　' + v.lines[0] + '…</span>' +
+                '<button class="rm" data-rm="' + v.id + '" title="移除">×</button>' +
+              '</div>';
+    });
+    box.innerHTML = html;
+    box.querySelectorAll("[data-rm]").forEach(function (b) {
+      b.addEventListener("click", function (e) { e.stopPropagation(); toggleSelect(b.dataset.rm, false);
+        var cb = document.querySelector('[data-check="' + b.dataset.rm + '"]'); if (cb) cb.checked = false; });
+    });
+    box.querySelectorAll("[data-tid]").forEach(function (it) {
+      it.addEventListener("click", function () {
+        jumpToVerse(it.dataset.tid);
+        var el = document.getElementById("verse-" + it.dataset.tid);
+        if (el && view === "all") flash(el);
+      });
+    });
+  }
+
+  // ---------- 播放引擎（真实音频） ----------
+  // 每颂的 [start,end] 来自 TIMINGS；同一品的颂共用一个 mp3，连播跨品时换文件。
+  function hasTiming(id) { return !!TIMINGS[id]; }
+
+  function stopEngine() {
+    if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+    clearTimeout(engine.loadWatch);
+    engine.seekToken = (engine.seekToken || 0) + 1;   // 作废任何在途的 seekThenPlay，别在停止后又出声
+    audio.pause();
+    engine.mode = null; engine.queue = []; engine.index = 0; engine.paused = false;
+    resetAllProgress(); syncPlayingUI();
+  }
+  // 暂停连播：保留 mode/queue/index，方便续播
+  function pauseSequence() {
+    if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+    engine.seekToken = (engine.seekToken || 0) + 1;   // 同上：暂停后不应被在途 seek 重新唤醒
+    audio.pause();
+    engine.paused = true;
+    syncPlayingUI();
+  }
+  // 续播：尽量从暂停的位置继续；若 prev/next 已切到别处则跳到该颂起点
+  function resumeSequence() {
+    if (engine.mode !== "sequence" || engine.queue.length === 0) { engine.paused = false; return; }
+    var id = engine.queue[engine.index];
+    var t = TIMINGS[id];
+    if (!t) { engine.paused = false; advanceSeq(); return; }
+    var ct = audio.currentTime;
+    engine.paused = false;
+    if (engine.curFile !== t.file || ct < t.start || ct >= t.end) {
+      playCurrent();   // 跨文件 / 跨颂 / 已结束 → 从该颂起点开始
+      return;
+    }
+    audio.playbackRate = rate;
+    audio.play().catch(function () {});
+    startTimer();
+    syncPlayingUI();
+  }
+  function resetAllProgress() {
+    document.querySelectorAll("[data-prog]").forEach(function (p) { p.style.width = "0%"; });
+    clearLineHighlight();
+  }
+  // 逐句高亮：当前正在念的那一句加 .active；只动正在播的那张卡，且仅在
+  // 「当前句」变化时才碰 DOM（_lineKey 去抖），100ms tick 下零额外开销。
+  function clearLineHighlight() {
+    if (engine._lineCard) {
+      var a = engine._lineCard.querySelectorAll(".ln.active");
+      for (var i = 0; i < a.length; i++) a[i].classList.remove("active");
+    }
+    engine._lineCard = null;
+    engine._lineKey = null;
+  }
+  function highlightLine(id, t) {
+    var v = byId[id];
+    var card = document.getElementById("verse-" + id);
+    if (!v || !card || !t) return;
+    var lts = getLineTimings(v, t);
+    if (!lts) return;
+    var ct = audio.currentTime, idx = lts.length - 1;
+    for (var i = 0; i < lts.length; i++) { if (ct < lts[i].end) { idx = i; break; } }
+    var key = id + ":" + idx;
+    if (key === engine._lineKey) return;
+    engine._lineKey = key;
+    if (engine._lineCard && engine._lineCard !== card) {
+      var prev = engine._lineCard.querySelectorAll(".ln.active");
+      for (var p = 0; p < prev.length; p++) prev[p].classList.remove("active");
+    }
+    engine._lineCard = card;
+    var lns = card.querySelectorAll(".lines .ln");
+    for (var k = 0; k < lns.length; k++) lns[k].classList.toggle("active", k === idx);
+  }
+
+  // 载入并从该颂起点开始播放当前 queue[index]
+  function playCurrent() {
+    var id = engine.queue[engine.index];
+    saveLastPosition();
+    var t = TIMINGS[id];
+    if (!t) {                                   // 该颂无音频时间戳（如流通分）
+      // 连播时跳到下一颂——但仅当队列里还有有音频的颂，否则全无音频会 advanceSeq↔playCurrent 死循环
+      if (engine.mode === "sequence" && engine.queue.some(hasTiming)) { advanceSeq(); return; }
+      pulse(document.getElementById("nowPlaying"), "该颂尚无音频时间点");
+      stopEngine(); return;
+    }
+    var doPlay = function () {
+      clearTimeout(engine.loadWatch);            // 元数据已就绪 → 撤掉加载看门狗
+      applyVol();
+      audio.playbackRate = rate;
+      seekThenPlay(t.start);                     // 先把光标确实定到本颂起点，再出声
+    };
+    if (engine.curFile !== t.file) {            // 需要切换 mp3
+      engine.curFile = t.file;
+      audio.src = AUDIO_BASE + encodeURIComponent(audioFile(t.file));
+      audio.addEventListener("loadedmetadata", doPlay, { once: true });
+      audio.load();
+      // 加载看门狗：网络很差时 loadedmetadata 可能迟迟不触发（静默卡死），给个提示而不是干等
+      clearTimeout(engine.loadWatch);
+      engine.loadWatch = setTimeout(function () {
+        if (engine.mode && engine.curFile === t.file && audio.readyState < 1) {
+          pulse(document.getElementById("nowPlaying"), "音频加载较慢，请检查网络…");
+        }
+      }, 10000);
+    } else {
+      doPlay();
+    }
+    startTimer();
+    syncPlayingUI();
+  }
+
+  // 关键修复（冷缓存跳转失败 → 从整品 mp3 开头出声 = 误放本品第一颂）：
+  // 部署在 Cloudflare 上，mp3 在边缘缓存未命中时会以「整文件、HTTP 200、不支持 Range」返回，
+  // 此时浏览器无法跳到中段；旧代码 loadedmetadata 后立刻 audio.currentTime=start 再 play()，
+  // 跳不动就从 0 秒出声，于是无论高亮哪一颂，听到的都是本品第一颂。
+  // 这里改成：设好目标位置后，确认 currentTime 真的落到本颂起点附近才出声；
+  // 还没缓冲到该位置（seek 跳不动）时静默等待、随缓冲推进重试，绝不放出错颂。
+  function seekThenPlay(target) {
+    var token = (engine.seekToken = (engine.seekToken || 0) + 1);
+    audio.currentTime = target;
+    var waited = 0;
+    var attempt = function () {
+      if (token !== engine.seekToken) return;          // 已被新的播放请求接管 → 放弃本次
+      if (Math.abs(audio.currentTime - target) <= 0.35) {
+        audio.play().catch(function () {});            // 已落到本颂起点 → 出声
+        return;
+      }
+      if (audio.seeking) {                              // 正在跳：别重设（重设会打断本次 seek）
+        if (waited++ < 150) setTimeout(attempt, 100);
+        return;
+      }
+      if (waited++ < 150) {                             // 没在跳又没落点 → 随缓冲增长再试
+        audio.currentTime = target;
+        setTimeout(attempt, 100);
+        return;
+      }
+      audio.play().catch(function () {});               // 兜底：仍出声，由 tick() 守卫继续纠正
+    };
+    setTimeout(attempt, 50);
+  }
+
+  // 进度 + 到达本颂 end 的检测（timeupdate 粒度太粗，用 100ms 轮询）
+  function tick() {
+    var id = engine.queue[engine.index];
+    var t = TIMINGS[id];
+    if (!t) return;
+    // 守卫：若播放位置滑到本颂起点之前（冷缓存 seek 失败会从整品开头出声），
+    // 立即纠回本颂起点，保证永远不会放成「本品第一颂」。
+    if (!audio.paused && !audio.seeking && audio.currentTime < t.start - 0.5) {
+      audio.currentTime = t.start;
+      return;
+    }
+    var prog = document.querySelector('[data-prog="' + id + '"]');
+    var span = Math.max(t.end - t.start, 0.01);
+    var ratio = Math.min(Math.max((audio.currentTime - t.start) / span, 0), 1);
+    if (prog) prog.style.width = (ratio * 100) + "%";
+    highlightLine(id, t);
+    if (audio.currentTime >= t.end - 0.02) onVerseEnd();
+  }
+  function onVerseEnd() {
+    var id = engine.queue[engine.index];
+    var prog = document.querySelector('[data-prog="' + id + '"]');
+    if (engine.mode === "single") {
+      if (engine.looping) { if (prog) prog.style.width = "0%"; audio.currentTime = TIMINGS[id].start; }
+      else { stopEngine(); }
+    } else { // sequence
+      if (prog) prog.style.width = "0%";
+      advanceSeq();
+    }
+  }
+  // 连播推进到下一颂（到末尾按是否循环决定回头或停止）
+  function advanceSeq() {
+    var prevId = engine.queue[engine.index];
+    var prevT = TIMINGS[prevId];
+    if (engine.index < engine.queue.length - 1) { engine.index++; }
+    else if (engine.looping) { engine.index = 0; }
+    else { stopEngine(); return; }
+    var nextId = engine.queue[engine.index];
+    var nextT = TIMINGS[nextId];
+    syncPlayingUI(); renderToday(); scrollToCurrent();
+
+    // 衔接优化：同一 mp3、时间近似连续、音频仍在播 → 不 seek 不 reload，
+    // 让音频自然过渡，避免 seek 引起的瞬时缓冲卡顿。
+    if (prevT && nextT && nextT.file === prevT.file &&
+        engine.curFile === nextT.file &&
+        Math.abs(nextT.start - prevT.end) < 0.15 &&
+        !audio.paused && !audio.ended) {
+      return;
+    }
+    playCurrent();
+  }
+  function startTimer() {
+    if (engine.timer) clearInterval(engine.timer);
+    engine.timer = setInterval(tick, 100);
+  }
+
+  // 单颂播放
+  function onSinglePlay(id) {
+    var alreadyPlayingThis = engine.mode === "single" && engine.queue[0] === id && engine.timer;
+    var keepLoop = (engine.mode === "single" && engine.queue[0] === id) ? engine.looping : false;
+    stopEngine();
+    if (alreadyPlayingThis) { return; }   // 再次点击=停止
+    engine.mode = "single"; engine.queue = [id]; engine.index = 0;
+    engine.looping = keepLoop;
+    playCurrent();
+  }
+  function onSingleLoopToggle(id) {
+    if (engine.mode === "single" && engine.queue[0] === id) {
+      engine.looping = !engine.looping;
+      syncPlayingUI();
+    } else {
+      // 未在播放该颂：直接以循环模式开始播放
+      stopEngine();
+      engine.mode = "single"; engine.queue = [id]; engine.index = 0;
+      engine.looping = true;
+      playCurrent();
+    }
+  }
+
+  // 今日连播
+  function onSeqPlay() {
+    // 正在播 → 暂停（保留位置）
+    if (engine.mode === "sequence" && engine.timer) { pauseSequence(); return; }
+    // 已暂停 → 续播
+    if (engine.mode === "sequence" && engine.paused) { resumeSequence(); return; }
+    // 用 ⏮/⏭ 定位过但还没播过 → 从当前 index 开播（别重置成 0）
+    if (engine.mode === "sequence" && engine.queue.length > 0) {
+      renderToday(); scrollToCurrent();
+      playCurrent();
+      return;
+    }
+    // 否则：开始新一轮连播
+    var list = selectedOrdered();
+    if (list.length === 0) { pulse(document.getElementById("nowPlaying"), "请先勾选要背的颂"); return; }
+    stopEngine();
+    engine.mode = "sequence"; engine.queue = list.map(function (v) { return v.id; });
+    engine.index = 0;
+    engine.looping = savedSeqLoop || false;
+    renderToday(); scrollToCurrent();
+    playCurrent();
+  }
+  var savedSeqLoop = false;   // 每次刷新都默认关闭，避免用户不知道为什么"回到第一颗"
+  function onSeqLoopToggle() {
+    savedSeqLoop = !savedSeqLoop;
+    if (engine.mode === "sequence") engine.looping = savedSeqLoop;
+    syncPlayingUI();
+  }
+  function seqStep(delta) {
+    var wasPlaying = !!engine.timer;
+    var currentId = (engine.queue.length > 0) ? engine.queue[engine.index] : null;
+    if (engine.mode !== "sequence") {
+      var list = selectedOrdered(); if (!list.length) return;
+      engine.mode = "sequence"; engine.queue = list.map(function (v) { return v.id; });
+      // 单颂播放/无引擎 切到连播：尽量保留当前那一颂在 queue 中的位置
+      var pos = currentId ? engine.queue.indexOf(currentId) : -1;
+      engine.index = (pos >= 0) ? pos : 0;
+      engine.looping = savedSeqLoop;
+    }
+    resetAllProgress();
+    engine.index += delta;
+    if (engine.index < 0) engine.index = engine.looping ? engine.queue.length - 1 : 0;
+    if (engine.index >= engine.queue.length) engine.index = engine.looping ? 0 : engine.queue.length - 1;
+    saveLastPosition();
+    renderToday(); scrollToCurrent();
+    if (wasPlaying) { playCurrent(); }   // 若在播放，跳到目标颂继续播
+    else { syncPlayingUI(); }
+  }
+  function scrollToCurrent() {
+    if (engine.mode !== "sequence") return;
+    var id = engine.queue[engine.index];
+    // 主区(中间正文)滚到当前颂
+    var el = document.getElementById("verse-" + id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    // 右栏「今日背诵」列表也跟随
+    var todayEl = document.querySelector('[data-tid="' + id + '"]');
+    var container = document.getElementById("todayList");
+    if (todayEl && container) {
+      var rect = todayEl.getBoundingClientRect();
+      var contRect = container.getBoundingClientRect();
+      var target = container.scrollTop + (rect.top - contRect.top) - (container.clientHeight - rect.height) / 2;
+      container.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+    }
+  }
+  function pulse(el, msg) {
+    var old = el.textContent; el.innerHTML = msg;
+    setTimeout(function () { syncPlayingUI(); }, 1500);
+  }
+
+  // ---------- 同步播放态到 UI ----------
+  function syncPlayingUI() {
+    // 卡片高亮 + 按钮态
+    document.querySelectorAll(".verse").forEach(function (card) {
+      var id = card.dataset.id;
+      var isCur = engine.timer && engine.queue[engine.index] === id;
+      card.classList.toggle("playing", !!isCur);
+      var pb = card.querySelector("[data-play]");
+      var lb = card.querySelector("[data-loop]");
+      var playingThisSingle = engine.mode === "single" && engine.queue[0] === id && engine.timer;
+      if (pb) { pb.classList.toggle("active", !!playingThisSingle); pb.textContent = playingThisSingle ? "⏸ 停止" : "▶ 播放"; }
+      if (lb) { lb.classList.toggle("active", engine.mode === "single" && engine.queue[0] === id && engine.looping); }
+      if (!isCur) { var p = card.querySelector("[data-prog]"); if (p && engine.queue[engine.index] !== id) p.style.width = "0%"; }
+    });
+    // 连播按钮
+    var seqBtn = document.getElementById("btnSeqPlay");
+    var playingSeq = engine.mode === "sequence" && engine.timer;
+    seqBtn.textContent = playingSeq ? "⏸" : "▶";
+    seqBtn.classList.toggle("active", playingSeq);
+    document.getElementById("btnSeqLoop").classList.toggle("active", savedSeqLoop || (engine.mode === "sequence" && engine.looping));
+    // 当前播放提示
+    var np = document.getElementById("nowPlaying");
+    if (engine.mode === "sequence" && engine.queue.length) {
+      var v = byId[engine.queue[engine.index]];
+      var prefix = engine.paused ? '已暂停　' : '正在连播　';
+      var loopBadge = (savedSeqLoop || engine.looping) ? ' <span style="color:var(--accent);font-weight:600">🔁循环中</span>' : '';
+      np.innerHTML = prefix + '<b>' + (engine.index + 1) + ' / ' + engine.queue.length + '</b>　' + (v ? pinLabel(v) : '') + loopBadge;
+    } else if (engine.mode === "single" && engine.timer) {
+      var sv = byId[engine.queue[0]];
+      np.innerHTML = '单颂' + (engine.looping ? '循环' : '播放') + '　<b>' + (sv ? pinLabel(sv) : '') + '</b>';
+    } else {
+      np.textContent = "未开始";
+    }
+    updateMediaSession();
+  }
+
+  // ---------- 锁屏 / 通知栏播放控制（Media Session）----------
+  // 手机上最常见的用法是息屏 / 揣兜里连播，所以把当前颂的信息和上/下一颂、
+  // 播放/暂停接到系统锁屏控件上。全程 try/catch + 特性检测，旧浏览器不支持也不报错。
+  function updateMediaSession() {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    var ms = navigator.mediaSession;
+    var id = engine.queue[engine.index];
+    var v = id && byId[id];
+    if (v && id !== engine._msId) {           // 颂变了才刷新元数据
+      engine._msId = id;
+      try {
+        ms.metadata = new MediaMetadata({
+          title: pinLabel(v) + "　" + v.lines[0],
+          artist: "俱舍论本颂　·　" + v.pin,
+          album: "俱舍论本颂",
+          artwork: [
+            { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+            { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" }
+          ]
+        });
+      } catch (e) {}
+    }
+    try { ms.playbackState = engine.timer ? "playing" : (engine.mode ? "paused" : "none"); } catch (e) {}
+    // 锁屏进度条：以"本颂"为一条音轨（start..end）
+    var t = v && TIMINGS[id];
+    if (t) {
+      var dur = Math.max(t.end - t.start, 0.1);
+      var pos = Math.min(Math.max(audio.currentTime - t.start, 0), dur);
+      try { ms.setPositionState({ duration: dur, position: pos, playbackRate: audio.playbackRate || 1 }); } catch (e) {}
+    }
+  }
+  if (typeof navigator !== "undefined" && "mediaSession" in navigator) {
+    var _ms = navigator.mediaSession;
+    var _set = function (action, fn) { try { _ms.setActionHandler(action, fn); } catch (e) {} };
+    _set("play", function () {
+      if (engine.timer) return;                          // 已在播
+      if (engine.mode === "single") onSinglePlay(engine.queue[0]);
+      else onSeqPlay();                                  // 续播 / 开新一轮连播
+    });
+    _set("pause", function () {
+      if (!engine.timer) return;
+      if (engine.mode === "single") stopEngine();        // 单颂没有"暂停"，停掉
+      else pauseSequence();
+    });
+    _set("previoustrack", function () { seqStep(-1); });
+    _set("nexttrack", function () { seqStep(1); });
+  }
+
+  // ---------- 视图切换 ----------
+  function switchView(v) {
+    view = v;
+    // 切到任一标签即退出搜索，让「全部颂 / 今日背诵」回归正常视图
+    if (query) { query = ""; var si = document.getElementById("searchInput"); if (si) si.value = ""; }
+    // 进入练习：定一次本轮稳定队列（到期复习 + 受限新颂），重置揭晓/评级态
+    if (v === "train") { trainFree = false; sessionIds = todaySession().ids; revealed = {}; graded = {}; relearning = {}; stopEngine(); }
+    document.querySelectorAll(".tab").forEach(function (t) { t.classList.toggle("active", t.dataset.view === v); });
+    renderMain();
+  }
+
+  // ---------- 设置 ----------
+  function openSettings() {
+    document.getElementById("rateRange").value = rate;
+    document.getElementById("rateVal").textContent = rate;
+    document.getElementById("volRange").value = vol;
+    document.getElementById("volVal").textContent = Math.round(vol * 100);
+    document.getElementById("newPerDayRange").value = srs.settings.newPerDay;
+    document.getElementById("newPerDayVal").textContent = srs.settings.newPerDay;
+    document.getElementById("settingsMask").classList.add("open");
+    renderOfflineList();
+  }
+  function closeSettings() { document.getElementById("settingsMask").classList.remove("open"); }
+
+  // ---------- 离线音频（每品手动下载，SW 从缓存供给）----------
+  var AUDIO_CACHE = "jushe-audio-v1";
+  var downloading = {};   // 按品名记在途下载，防重入（按钮在 renderOfflineList 重渲染时会被替换）
+  function offlineSupported() { return "caches" in window; }
+  // 与 <audio> 实际请求一致的绝对 URL，作为 Cache 键，和 sw.js 的 match 对齐
+  function audioHref(file) { return new URL(AUDIO_BASE + encodeURIComponent(audioFile(file)), location.href).href; }
+  async function cachedHrefs() {
+    if (!offlineSupported()) return {};
+    try {
+      var c = await caches.open(AUDIO_CACHE);
+      var keys = await c.keys();
+      var set = {};
+      keys.forEach(function (req) { set[req.url] = true; });
+      return set;
+    } catch (e) { return {}; }
+  }
+  async function renderOfflineList() {
+    var box = document.getElementById("offlineList");
+    if (!box) return;
+    if (!offlineSupported()) {
+      box.innerHTML = '<div style="font-size:12px;color:var(--ink-soft)">此浏览器不支持离线缓存。</div>';
+      return;
+    }
+    var cached = await cachedHrefs();
+    box.innerHTML = "";
+    PIN_LIST.forEach(function (p) {
+      var isCached = !!cached[audioHref(p.audio)];
+      var row = document.createElement("div");
+      row.className = "offline-row";
+      row.innerHTML =
+        '<span class="nm">' + p.name + '</span>' +
+        '<span class="st' + (isCached ? " done" : "") + '">' + (isCached ? "已离线 ✓" : "未下载") + '</span>' +
+        '<button class="dl' + (isCached ? " cached" : "") + '">' + (isCached ? "删除" : "下载") + '</button>';
+      var btn = row.querySelector(".dl");
+      var st = row.querySelector(".st");
+      btn.addEventListener("click", function () { onOfflineToggle(p, btn, st, isCached); });
+      box.appendChild(row);
+    });
+  }
+  async function onOfflineToggle(p, btn, st, isCached) {
+    if (downloading[p.audio]) return;   // 在途下载中，忽略再次点击
+    var href = audioHref(p.audio);
+    if (isCached) {
+      btn.disabled = true; st.textContent = "删除中…";
+      try { var c = await caches.open(AUDIO_CACHE); await c.delete(href, { ignoreVary: true }); } catch (e) {}
+      renderOfflineList();
+      return;
+    }
+    downloading[p.audio] = true;
+    btn.disabled = true; btn.textContent = "下载中"; st.classList.remove("done");
+    try {
+      var resp = await fetch(href);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      var total = parseInt(resp.headers.get("content-length") || "0", 10);
+      var reader = resp.body.getReader();
+      var chunks = [], received = 0;
+      while (true) {
+        var r = await reader.read();
+        if (r.done) break;
+        chunks.push(r.value); received += r.value.length;
+        st.textContent = total ? (Math.round(received / total * 100) + "%")
+                               : ((received / 1048576).toFixed(1) + "M");
+      }
+      // 完整性校验：流提前干净结束（代理/HTTP2 偶发）会存成截断文件，SW 之后会把
+      // 截断当完整供给 = 静默污染。已知 total 时严格校验，宁可不存。
+      if (total && received !== total) throw new Error("下载不完整 " + received + "/" + total);
+      var ctype = /\.opus$/i.test(href) ? "audio/ogg" : "audio/mpeg";
+      var blob = new Blob(chunks, { type: ctype });
+      var cache = await caches.open(AUDIO_CACHE);
+      await cache.put(href, new Response(blob, { status: 200, headers: {
+        "Content-Type": ctype, "Content-Length": String(received), "Accept-Ranges": "bytes" } }));
+    } catch (e) {
+      delete downloading[p.audio];
+      st.textContent = "失败"; btn.disabled = false; btn.textContent = "重试";
+      return;
+    }
+    delete downloading[p.audio];
+    renderOfflineList();
+  }
+
+  // ---------- 事件绑定 ----------
+  document.querySelectorAll(".tab").forEach(function (t) {
+    t.addEventListener("click", function () { switchView(t.dataset.view); });
+  });
+  // 音频硬错误（404 / 网络中断 / 解码失败）：旧版无任何处理 → 静默卡在"假装在播"。
+  // 这里停下并停在"已暂停可续播"状态，给出明确提示。切换 src 引发的 ABORTED 不算错误。
+  audio.addEventListener("error", function () {
+    var err = audio.error;
+    if (!err || err.code === err.MEDIA_ERR_ABORTED) return;
+    if (!engine.mode) return;
+    // Opus 误报可播：个别浏览器 canPlayType 说支持却解不了。遇解码/格式错就本会话
+    // 降级到 mp3 重试一次，避免 ▶ 反复请求同一 opus 死循环 + 离线已下 opus 不可播。
+    if (AUDIO_EXT === "opus" && !engine._opusFellBack &&
+        (err.code === err.MEDIA_ERR_DECODE || err.code === err.MEDIA_ERR_SRC_NOT_SUPPORTED)) {
+      engine._opusFellBack = true;
+      AUDIO_EXT = "mp3";
+      engine.curFile = null;   // 强制 playCurrent 重新载入（这次走 mp3）
+      if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+      playCurrent();
+      return;
+    }
+    if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
+    clearTimeout(engine.loadWatch);
+    engine.seekToken = (engine.seekToken || 0) + 1;
+    audio.pause();
+    engine.paused = true;
+    syncPlayingUI();
+    document.getElementById("nowPlaying").innerHTML = "⚠ 音频加载失败，请检查网络后点 ▶ 重试";
+  });
+
+  document.getElementById("btnSeqPlay").addEventListener("click", onSeqPlay);
+  document.getElementById("btnSeqLoop").addEventListener("click", onSeqLoopToggle);
+  document.getElementById("btnPrev").addEventListener("click", function () { seqStep(-1); });
+  document.getElementById("btnNext").addEventListener("click", function () { seqStep(1); });
+  document.getElementById("btnClear").addEventListener("click", function () {
+    if (!selected.size) return;
+    selected.clear(); saveSelected(); stopEngine(); renderToday(); updateBadges();
+    document.querySelectorAll("[data-check]").forEach(function (cb) { cb.checked = false; });
+    if (view === "today") renderMain();
+    else refreshPinSelButtons();
+    clearLastPosition();    // 列表清空后，"上次背到哪"已经没有上下文，一并清掉
+  });
+  document.getElementById("btnSettings").addEventListener("click", openSettings);
+  document.getElementById("btnCloseSettings").addEventListener("click", closeSettings);
+  document.getElementById("btnReset").addEventListener("click", function () {
+    if (!confirm("确认重置?\n\n会清掉:\n- 已选偈颂列表\n- 上次播放位置\n- 速度/音量等设置\n- 浏览器为本站留下的所有缓存\n\n然后会自动强刷取最新代码。")) return;
+    try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf("kusha_") === 0) localStorage.removeItem(k); }); } catch (e) {}
+    if (window.caches) {
+      caches.keys().then(function (keys) {
+        return Promise.all(keys.map(function (k) { return caches.delete(k); }));
+      }).catch(function () {});
+    }
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        regs.forEach(function (reg) { reg.unregister().catch(function () {}); });
+      }).catch(function () {});
+    }
+    setTimeout(function () {
+      var u = new URL(location.href);
+      u.searchParams.set("v", "reset" + Date.now());
+      location.replace(u.toString());
+    }, 500);
+  });
+
+  document.getElementById("btnDiag").addEventListener("click", function () {
+    var curId = engine.queue[engine.index];
+    var v = curId && byId[curId];
+    var info = [
+      "── 引擎状态 ──",
+      "mode: " + engine.mode,
+      "queue.length: " + engine.queue.length,
+      "index: " + engine.index + " (人类视角第 " + (engine.index + 1) + " 颂)",
+      "current queue id: " + curId,
+      "current label: " + (v ? pinLabel(v) : "(none)"),
+      "paused: " + engine.paused,
+      "timer running: " + (!!engine.timer),
+      "looping (engine): " + engine.looping,
+      "savedSeqLoop: " + savedSeqLoop,
+      "curFile: " + engine.curFile,
+      "",
+      "── 音频状态 ──",
+      "audio.src: " + (audio.src || "(empty)").split("/").pop(),
+      "audio.currentTime: " + audio.currentTime.toFixed(3),
+      "audio.duration: " + (audio.duration || "?"),
+      "audio.paused: " + audio.paused,
+      "audio.ended: " + audio.ended,
+      "",
+      "── 选择 ──",
+      "view: " + view,
+      "selected.size: " + selected.size,
+      "savedSelected length: " + (JSON.parse(localStorage.getItem("kusha_selected_v1") || "[]").length),
+      "savedLast: " + (localStorage.getItem("kusha_last_v1") || "(none)")
+    ].join("\n");
+    alert(info);
+  });
+
+  // 移动端：汉堡菜单 → 切换左侧目录抽屉
+  function openMobileDrawer() {
+    document.getElementById("catalog").classList.add("open");
+    document.getElementById("drawerMask").classList.add("open");
+  }
+  function closeMobileDrawer() {
+    document.getElementById("catalog").classList.remove("open");
+    document.getElementById("drawerMask").classList.remove("open");
+  }
+  document.getElementById("btnMenu").addEventListener("click", openMobileDrawer);
+  document.getElementById("drawerMask").addEventListener("click", closeMobileDrawer);
+  document.getElementById("settingsMask").addEventListener("click", function (e) {
+    if (e.target === this) closeSettings();
+  });
+  document.getElementById("rateRange").addEventListener("input", function () {
+    rate = parseFloat(this.value);
+    document.getElementById("rateVal").textContent = rate;
+    safeSet(LS_RATE, rate);
+    audio.playbackRate = rate;
+  });
+  document.getElementById("volRange").addEventListener("input", function () {
+    vol = parseFloat(this.value);
+    document.getElementById("volVal").textContent = Math.round(vol * 100);
+    safeSet(LS_VOL, vol);
+    applyVol();
+  });
+  document.getElementById("newPerDayRange").addEventListener("input", function () {
+    srs.settings.newPerDay = parseInt(this.value, 10);
+    document.getElementById("newPerDayVal").textContent = srs.settings.newPerDay;
+    saveSRS();
+    updateBadges();   // 待练数随上限变
+  });
+
+  // ---------- 进度备份：导出 / 导入 ----------
+  function exportProgress() {
+    var data = { app: "jushe-recite", exportedAt: new Date().toISOString(), keys: {} };
+    Object.keys(localStorage).forEach(function (k) { if (k.indexOf("kusha_") === 0) data.keys[k] = localStorage.getItem(k); });
+    var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "俱舍背诵进度-" + todayStr() + ".json";
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  function importProgress(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var data;
+      try { data = JSON.parse(reader.result); } catch (e) { alert("文件格式不对，无法导入。"); return; }
+      if (!data || !data.keys || data.app !== "jushe-recite") { alert("这不是俱舍背诵的进度文件。"); return; }
+      var n = Object.keys(data.keys).filter(function (k) { return k.indexOf("kusha_") === 0; }).length;
+      if (!confirm("导入会用文件里的进度【替换】本机当前进度（含熟练度/选颂/设置），共 " + n + " 项。\n确定继续？")) return;
+      // 先快照本机 kusha_ 数据用于回滚：配额满/隐私模式下 setItem 中途抛错，不留半套损坏状态
+      var backup = {};
+      Object.keys(localStorage).forEach(function (k) { if (k.indexOf("kusha_") === 0) backup[k] = localStorage.getItem(k); });
+      try {
+        Object.keys(backup).forEach(function (k) { localStorage.removeItem(k); });
+        Object.keys(data.keys).forEach(function (k) {
+          if (k.indexOf("kusha_") === 0) localStorage.setItem(k, String(data.keys[k]));   // String：防非字符串值
+        });
+      } catch (e) {
+        Object.keys(localStorage).forEach(function (k) { if (k.indexOf("kusha_") === 0) localStorage.removeItem(k); });
+        Object.keys(backup).forEach(function (k) { try { localStorage.setItem(k, backup[k]); } catch (e2) {} });
+        alert("导入失败（存储空间可能不足），已保留原进度。");
+        return;
+      }
+      location.reload();
+    };
+    reader.readAsText(file);
+  }
+  document.getElementById("btnExport").addEventListener("click", exportProgress);
+  document.getElementById("btnImport").addEventListener("click", function () { document.getElementById("importFile").click(); });
+  document.getElementById("importFile").addEventListener("change", function () { if (this.files && this.files[0]) importProgress(this.files[0]); this.value = ""; });
+
+  // ---------- 搜索输入（防抖 150ms）----------
+  var searchTimer = null;
+  var searchInputEl = document.getElementById("searchInput");
+  function runSearch() {
+    var val = searchInputEl.value.trim();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () { query = val; renderMain(); }, 150);
+  }
+  searchInputEl.addEventListener("input", function (e) {
+    // 组字中途（拼音中间态）不触发，避免闪「没有匹配」；组字结束由 compositionend 兜底
+    if (e && e.isComposing) return;
+    runSearch();
+  });
+  // 中文输入法提交后必跑一次：部分浏览器/IME 在 compositionend 之后的 input 事件仍带
+  // isComposing=true，会被上面跳过，导致多字词（如「无明」）卡在已提交的首字（「无」）。
+  searchInputEl.addEventListener("compositionend", function () { runSearch(); });
+
+  // ---------- 深链：#verse-<id> 可分享 / 书签定位到某颂 ----------
+  function setHash(id) {
+    try { history.replaceState(null, "", "#verse-" + id); }
+    catch (e) { location.hash = "verse-" + id; }
+  }
+  function gotoHash() {
+    var m = (location.hash || "").match(/^#verse-(.+)$/);
+    if (!m) return;
+    var id;
+    try { id = decodeURIComponent(m[1]); } catch (e) { return; }   // 容错坏的 %-转义
+    if (!Object.prototype.hasOwnProperty.call(byId, id)) return;   // 防原型键（constructor/toString 等）误命中
+    if (view !== "all" || query) switchView("all");
+    var el = document.getElementById("verse-" + id);
+    if (el) { el.scrollIntoView({ behavior: "smooth", block: "center" }); flash(el); }
+  }
+  window.addEventListener("hashchange", gotoHash);
+
+  // ---------- 键盘快捷键 ----------
+  // 空格=连播/暂停、← →=上/下颂、/=聚焦搜索。在输入框内不拦截（Esc 失焦）。
+  document.addEventListener("keydown", function (e) {
+    var tag = (e.target && e.target.tagName) || "";
+    var inField = tag === "INPUT" || tag === "TEXTAREA" || (e.target && e.target.isContentEditable);
+    if (e.key === "/" && !inField) {
+      e.preventDefault(); document.getElementById("searchInput").focus(); return;
+    }
+    if (inField) { if (e.key === "Escape") e.target.blur(); return; }
+    if (view === "train") { if (e.key === "Escape") switchView("all"); return; }   // 练习视图：Esc 结束；不接管空格/箭头
+    if (e.key === " " || e.code === "Space") { e.preventDefault(); onSeqPlay(); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); seqStep(-1); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); seqStep(1); }
+  });
+
+  // ---------- 初始化 ----------
+  bindMainDelegation(document.getElementById("mainList"));
+  renderCatalog();
+  renderMain();
+  renderToday();
+  updateBadges();
+  restoreLastPosition();
+  gotoHash();   // 若以 #verse-<id> 进入，定位到该颂
+})();
+
+  // 注册离线 service worker（窄范围：app-shell 预缓存 + 用户手动下载的品离线供给）。
+  // 新 SW skipWaiting+claim 后会触发 controllerchange，这里只 reload 一次让页面被新
+  // SW 接管（swRefreshing 去重防 reload 循环）。「重置应用」按钮仍是注销 SW 的逃生舱。
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+    });
+    var swRefreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (swRefreshing) return;
+      swRefreshing = true;
+      location.reload();
+    });
+  }

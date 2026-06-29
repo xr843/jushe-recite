@@ -26,8 +26,26 @@ class RangeRequestHandler(SimpleHTTPRequestHandler):
     # .opus 不在 Python 默认 mimetypes 里，补上（生产 Cloudflare 自带 audio/ogg）
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map, ".opus": "audio/ogg"}
 
+    # 安全头：生产由 Cloudflare 的 _headers 负责，这里镜像一份，让本地 dev 也能真测 CSP
+    # （serve.py 不读 _headers，不加这份本地就测不出 strict CSP 是否打破内联）。改 _headers 时同步这里。
+    SECURITY_HEADERS = {
+        "Content-Security-Policy": (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; media-src 'self'; connect-src 'self'; worker-src 'self'; "
+            "manifest-src 'self'; object-src 'none'; base-uri 'none'; "
+            "frame-ancestors 'none'; form-action 'none'"
+        ),
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "X-Frame-Options": "DENY",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Permissions-Policy": "geolocation=(), camera=(), microphone=(), payment=(), usb=(), interest-cohort=()",
+    }
+
     def end_headers(self):
         self.send_header("Accept-Ranges", "bytes")
+        for k, v in self.SECURITY_HEADERS.items():
+            self.send_header(k, v)
         super().end_headers()
 
     def send_head(self):

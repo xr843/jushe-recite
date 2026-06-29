@@ -1,4 +1,16 @@
 # Cloudflare Pages 响应头
+
+# 安全头（全站）。本 app 100% 自包含：无外部 CDN、无内联事件处理器、无 eval，
+# 主程序与样式已抽成 app.js/app.css，故 script-src 可严格 'self'（真正的 XSS 执行防护）。
+# style-src 保留 'unsafe-inline' 仅因若干装饰性内联 style 属性（CSS 注入风险远低于脚本）。
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  X-Frame-Options: DENY
+  Cross-Origin-Opener-Policy: same-origin
+  Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=(), usb=(), interest-cohort=()
+
 # 偈颂音频是大文件（单品 mp3 约 13MB）。给它们一个长缓存：
 #  - 浏览器缓存整文件后，跳到中段（seek 到某颂起点）就完全可靠 → 不会再误放本品第一颂
 #  - 边缘缓存保持温热 → Range 请求返回 206，逐颂 seek 即时可用
