@@ -906,8 +906,8 @@
     var checked = selected.has(v.id) ? "checked" : "";
     var noTag = v.localNo + '<span class="g">#' + v.globalNo + '</span>';
     var m = masteryOf(v.id);
-    var mtag = (!isTrain && m !== "new")
-      ? '<div class="mtag ' + m + '">' + (m === "mastered" ? "已背熟 ✓" : "学习中") + '</div>' : '';
+    // 只在「已背熟」时挂标签（成就信号）；未学/学习中不显，避免今日背诵里满屏同样的「学习中」噪音
+    var mtag = (!isTrain && m === "mastered") ? '<div class="mtag mastered">已背熟 ✓</div>' : '';
     var showMasked = isTrain && !revealed[v.id];
     var linesHtml = showMasked ? maskedLines(v) : v.lines.map(function (ln, i) {
       var punc = (i === v.lines.length - 1) ? "。" : "，";
