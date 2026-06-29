@@ -169,6 +169,43 @@
 
   .empty-hint { color: var(--ink-soft); text-align: center; padding: 60px 20px; font-size: 15px; }
 
+  /* ---------- 背诵训练（自测 / SRS）---------- */
+  .list-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; font-size: 13px; color: var(--ink-soft); }
+  .list-head label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .list-head input { accent-color: var(--accent); }
+  .list-head .prog { margin-left: auto; }
+  .list-head .prog b { color: var(--accent); }
+  .train-bar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin: 0 0 16px; padding: 12px 16px; background: var(--accent-bg);
+    border: 1px solid var(--accent-soft); border-radius: var(--radius); font-size: 14px;
+  }
+  .train-bar .stat b { color: var(--accent); }
+  .train-bar .spacer { flex: 1; }
+  .train-bar .masksel { display: flex; gap: 6px; }
+  .train-bar .masksel button {
+    border: 1px solid var(--line); background: var(--paper); color: var(--ink-soft);
+    padding: 4px 12px; border-radius: 14px; font-size: 13px;
+  }
+  .train-bar .masksel button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* 遮挡的字：保留 CJK 字宽，显为灰块 */
+  .verse .ln .mc { background: var(--line); color: transparent; border-radius: 3px; }
+  /* 揭晓 / 评级按钮（占 .ops 位） */
+  .verse .reveal-btn {
+    border: 1px solid var(--accent-soft); background: var(--paper); color: var(--accent);
+    padding: 7px 18px; border-radius: 8px; font-size: 14px; white-space: nowrap;
+  }
+  .verse .reveal-btn:hover { background: var(--accent-bg); }
+  .verse .grade-btn { border: none; padding: 7px 18px; border-radius: 8px; font-size: 14px; color: #fff; white-space: nowrap; }
+  .verse .grade-btn.forgot { background: #b5462f; }
+  .verse .grade-btn.known { background: #5a8a5a; }
+  .verse .grade-btn:hover { filter: brightness(1.08); }
+  .verse.done { opacity: .5; }
+  /* 熟练度小标 */
+  .verse .mtag { font-size: 11px; margin-top: 4px; font-weight: 400; }
+  .verse .mtag.learning { color: var(--accent-soft); }
+  .verse .mtag.mastered { color: #5a8a5a; }
+
   /* ---------- 右栏 今日背诵 ---------- */
   .right-head { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
   .right-head h3 { font-size: 16px; }
@@ -309,6 +346,7 @@
     <div class="tabs">
       <button class="tab active" data-view="all">全部颂</button>
       <button class="tab" data-view="today">今日背诵<span class="badge" id="tabBadge">0</span></button>
+      <button class="tab" data-view="train">练习<span class="badge" id="trainBadge">0</span></button>
     </div>
     <div class="search"><input id="searchInput" type="search" placeholder="搜索偈颂…" aria-label="搜索偈颂正文" autocomplete="off"></div>
     <div class="spacer"></div>
@@ -350,12 +388,24 @@
         <span>音量</span>
         <span><input type="range" id="volRange" min="0" max="1" step="0.05"> <b id="volVal">100</b> %</span>
       </div>
+      <div class="row">
+        <span>每日新颂上限</span>
+        <span><input type="range" id="newPerDayRange" min="0" max="20" step="1"> <b id="newPerDayVal">6</b> 颂</span>
+      </div>
+      <div class="offline-sec">
+        <div class="offline-head">进度备份 <span class="offline-hint">熟练度/选颂存在本机，清缓存会丢，记得导出</span></div>
+        <div style="display:flex;gap:10px;margin-top:8px">
+          <button id="btnExport" style="flex:1;border:1px solid var(--accent-soft);background:var(--paper);color:var(--accent);padding:6px 0;border-radius:8px;font-size:13px;cursor:pointer">导出进度</button>
+          <button id="btnImport" style="flex:1;border:1px solid var(--accent-soft);background:var(--paper);color:var(--accent);padding:6px 0;border-radius:8px;font-size:13px;cursor:pointer">导入进度</button>
+          <input type="file" id="importFile" accept="application/json,.json" style="display:none">
+        </div>
+      </div>
       <div class="offline-sec">
         <div class="offline-head">离线音频 <span class="offline-hint" id="offlineHint">下载后该品可无网背诵</span></div>
         <div class="offline-list" id="offlineList"></div>
       </div>
       <div style="font-size:11px;color:var(--ink-soft);text-align:center;margin-top:14px;padding-top:10px;border-top:1px solid var(--line)">
-        版本 <code id="appVersion" style="font-family:monospace">2026-06-28-r14</code>
+        版本 <code id="appVersion" style="font-family:monospace">2026-06-29-r15</code>
         　<button id="btnDiag" style="font-size:11px;background:transparent;border:1px solid var(--line);padding:2px 8px;border-radius:4px;color:var(--ink-soft);cursor:pointer">诊断</button>
         　<button id="btnReset" style="font-size:11px;background:transparent;border:1px solid #b5462f;padding:2px 8px;border-radius:4px;color:#b5462f;cursor:pointer">重置应用</button>
       </div>
@@ -386,8 +436,14 @@
   var vol = parseFloat(localStorage.getItem(LS_VOL) || "1");
   if (!isFinite(vol)) vol = 1;
   vol = Math.min(Math.max(vol, 0), 1);
-  var view = "all";
-  var query = "";   // 搜索关键词（非空时主区显示全库匹配结果，命中处高亮）
+  var view = "all";          // all | today | train
+  var query = "";            // 搜索关键词（非空时主区显示全库匹配结果，命中处高亮）
+  var maskLevel = "first";   // 练习遮挡级别：first=露首字 / all=全遮
+  var revealed = {};         // 本次练习已揭晓的颂 id（内存态，切视图重置）
+  var graded = {};           // 本轮「会了」的颂 id（置灰=完成 + 推进）
+  var relearning = {};       // 本轮「忘了」的颂 id（已记一次 lapse，重练时不再重复扣 ease）
+  var sessionIds = null;     // 本轮练习的稳定队列（进练习时定一次，评级不抽走卡片）
+  var onlyUnmastered = false; // 「只看未背熟」筛选（all/today 视图）
 
   function applyVol() { audio.volume = vol; }
 
@@ -432,6 +488,86 @@
     return VERSES.filter(function (v) { return selected.has(v.id); })
                  .sort(function (a, b) { return a.globalNo - b.globalNo; });
   }
+
+  // ---------- SRS 背诵训练（数据层 + 调度）----------
+  // 每颂一张卡 {ease,interval,reps,lapses,due,last}；无卡=未学。SM-2-lite：无 Hard、无
+  // ML、无后端。忘→当场重来+ease 降；会→ease 升、间隔增长。规避 ease hell：ease 有地板
+  // 1.3 且靠"会"回升(+0.05)。每日新颂上限防复习雪崩。新颂从「今日背诵」选择引入。
+  var LS_SRS = "kusha_srs_v1";
+  var DAY = 864e5;
+  var MASTER_DAYS = 21;   // interval ≥ 21 天算「已熟」(Anki mature 惯例)
+  function loadSRS() {
+    var d;
+    try { d = JSON.parse(localStorage.getItem(LS_SRS) || "null"); } catch (e) { d = null; }
+    if (!d || d.v !== 1) d = { v: 1, settings: { newPerDay: 6 }, daily: {}, cards: {} };
+    if (!d.settings || typeof d.settings.newPerDay !== "number") d.settings = { newPerDay: 6 };
+    if (!d.daily) d.daily = {};
+    if (!d.cards) d.cards = {};
+    return d;
+  }
+  var srs = loadSRS();
+  function saveSRS() { localStorage.setItem(LS_SRS, JSON.stringify(srs)); }
+  function todayStr() { var dt = new Date(); return dt.getFullYear() + "-" + (dt.getMonth() + 1) + "-" + dt.getDate(); }
+  function rollDaily() { if (srs.daily.date !== todayStr()) srs.daily = { date: todayStr(), newDone: 0 }; }
+  function srsCard(id) { return srs.cards[id] || null; }
+  // 评级：0=忘 1=会（保留 2=易 备扩展，二态 UI 只用 0/1）
+  function reviewCard(id, grade) {
+    rollDaily();
+    var now = Date.now();
+    var c = srs.cards[id];
+    var isNew = !c;
+    if (isNew) c = { ease: 2.5, interval: 0, reps: 0, lapses: 0, due: 0, last: 0 };
+    if (grade === 0) {                         // 忘
+      c.lapses++; c.reps = 0; c.interval = 0;
+      c.ease = Math.max(1.3, c.ease - 0.2);
+      c.due = now + 6e5;                        // 10 分钟后本轮再出
+    } else {                                    // 会（或易）
+      c.reps++;
+      c.ease = Math.min(3.0, c.ease + (grade === 2 ? 0.15 : 0.05));
+      if (c.reps === 1) c.interval = grade === 2 ? 4 : 1;
+      else if (c.reps === 2) c.interval = 6;
+      else c.interval = Math.ceil(c.interval * c.ease);
+      c.due = now + c.interval * DAY;
+    }
+    c.last = now;
+    srs.cards[id] = c;
+    if (isNew) srs.daily.newDone = (srs.daily.newDone || 0) + 1;   // 新颂引入计数（受上限约束）
+    saveSRS();
+    return c;
+  }
+  function masteryOf(id) {
+    var c = srs.cards[id];
+    if (!c) return "new";                       // 未学
+    if (c.interval >= MASTER_DAYS) return "mastered";
+    return "learning";
+  }
+  // 今日训练队列：到期复习 + （受每日上限约束的）新颂；复习在前、新颂在后。
+  function todaySession() {
+    rollDaily();
+    var now = Date.now();
+    var due = [];
+    for (var id in srs.cards) {
+      if (srs.cards.hasOwnProperty(id) && byId[id] && srs.cards[id].due <= now) due.push(id);
+    }
+    due.sort(function (a, b) { return srs.cards[a].due - srs.cards[b].due; });
+    var quota = Math.max(0, srs.settings.newPerDay - (srs.daily.newDone || 0));
+    var news = [];
+    if (quota > 0) {
+      news = selectedOrdered()
+        .filter(function (v) { return !srs.cards[v.id]; })
+        .slice(0, quota)
+        .map(function (v) { return v.id; });
+    }
+    var seen = {}, out = [];
+    due.concat(news).forEach(function (id) { if (!seen[id]) { seen[id] = 1; out.push(id); } });
+    return { ids: out, dueCount: due.length, newCount: news.length };
+  }
+  function masteredCount() {
+    var n = 0;
+    for (var id in srs.cards) if (srs.cards.hasOwnProperty(id) && byId[id] && masteryOf(id) === "mastered") n++;
+    return n;
+  }
+
   function pinLabel(v) { return v.pin.replace("品", "").replace("分", "") + v.localNo; }
   function fmt(sec) { var m = Math.floor(sec / 60), s = Math.floor(sec % 60); return m + ":" + (s < 10 ? "0" : "") + s; }
 
@@ -531,8 +667,49 @@
       return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
     });
   }
+  // all/today 视图顶部：只看未熟筛选 + 已熟进度
+  function listHead() {
+    if (query) return "";
+    return '<div class="list-head">' +
+      '<label><input type="checkbox" id="filterUnmastered"' + (onlyUnmastered ? " checked" : "") + '> 只看未背熟</label>' +
+      '<span class="prog">已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</span>' +
+      '</div>';
+  }
+  function maskBar() {
+    var ids = sessionIds || [];
+    var doneN = ids.filter(function (id) { return graded[id]; }).length;
+    return '<div class="train-bar">' +
+      '<span class="stat">本轮 <b>' + doneN + '</b> / ' + ids.length +
+        (ids.length && doneN === ids.length ? ' · 完成 🎉' : '') + '</span>' +
+      '<span class="stat">已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</span>' +
+      '<span class="spacer"></span>' +
+      '<span class="masksel">' +
+        '<button data-mask="first" class="' + (maskLevel === "first" ? "on" : "") + '">露首字</button>' +
+        '<button data-mask="all" class="' + (maskLevel === "all" ? "on" : "") + '">全遮</button>' +
+      '</span></div>';
+  }
   function renderMain() {
     var main = document.getElementById("mainList");
+
+    // ---- 练习视图：本轮稳定队列（到期复习 + 受限新颂），遮罩自测 ----
+    if (view === "train") {
+      var ids = sessionIds || [];
+      if (ids.length === 0) {
+        main.innerHTML = maskBar() +
+          '<div class="empty-hint">今天没有要练的了 🎉<br>' +
+          '到期复习已清空；想多学新颂，去「今日背诵」勾选更多，<br>或在设置调高每日新颂上限。</div>';
+        engine._lineCard = null; engine._lineKey = null;
+        return;
+      }
+      var th = maskBar();
+      ids.forEach(function (id) { if (byId[id]) th += verseCard(byId[id]); });
+      main.innerHTML = th;
+      engine._lineCard = null; engine._lineKey = null;
+      syncPlayingUI();
+      return;
+    }
+
+    // ---- 搜索 / 全部 / 今日 ----
     var list;
     if (query) {
       list = VERSES.filter(matchesQuery);
@@ -542,13 +719,18 @@
         return;
       }
     } else {
+      if (view === "today" && selectedOrdered().length === 0) {
+        main.innerHTML = listHead() + '<div class="empty-hint">今日背诵列表为空。<br>切到「全部颂」勾选你今天要背的偈颂吧。</div>';
+        return;
+      }
       list = view === "all" ? VERSES : selectedOrdered();
-      if (view === "today" && list.length === 0) {
-        main.innerHTML = '<div class="empty-hint">今日背诵列表为空。<br>切到「全部颂」勾选你今天要背的偈颂吧。</div>';
+      if (onlyUnmastered) list = list.filter(function (v) { return masteryOf(v.id) !== "mastered"; });
+      if (list.length === 0) {
+        main.innerHTML = listHead() + '<div class="empty-hint">这里没有未背熟的颂了 🎉</div>';
         return;
       }
     }
-    var html = "";
+    var html = query ? "" : listHead();
     var lastPin = null;
     list.forEach(function (v) {
       if (v.pin !== lastPin) {
@@ -574,29 +756,53 @@
       return "共 " + PIN_LIST[i].count + " 颂 · 🎵 " + PIN_LIST[i].audio;
     return "";
   }
+  // 遮挡正文：first=每句留首字、其余显灰块；all=整句灰块。标点保留作位置线索。
+  function maskedLines(v) {
+    return v.lines.map(function (ln, i) {
+      var punc = (i === v.lines.length - 1) ? "。" : "，";
+      var chars = ln.split("").map(function (ch, j) {
+        return (maskLevel === "first" && j === 0) ? ch : '<span class="mc">' + ch + '</span>';
+      }).join("");
+      return '<span class="ln">' + chars + punc + '</span>';
+    }).join("");
+  }
   function verseCard(v) {
+    var isTrain = view === "train";
     var checked = selected.has(v.id) ? "checked" : "";
     var noTag = v.localNo + '<span class="g">#' + v.globalNo + '</span>';
-    var lines = v.lines.map(function (ln, i) {
+    var m = masteryOf(v.id);
+    var mtag = (!isTrain && m !== "new")
+      ? '<div class="mtag ' + m + '">' + (m === "mastered" ? "已背熟 ✓" : "学习中") + '</div>' : '';
+    var showMasked = isTrain && !revealed[v.id];
+    var linesHtml = showMasked ? maskedLines(v) : v.lines.map(function (ln, i) {
       var punc = (i === v.lines.length - 1) ? "。" : "，";
-      return '<span class="ln">' + hlMatch(ln) + punc + '</span>';
+      return '<span class="ln">' + (isTrain ? ln : hlMatch(ln)) + punc + '</span>';
     }).join("");
     var t = TIMINGS[v.id];
-    var audioNote = t
-      ? ('🎵 ' + fmt(t.start) + ' – ' + fmt(t.end) + ' · ' + t.file)
-      : '⏳ 音频待对齐';
+    var audioNote = t ? ('🎵 ' + fmt(t.start) + ' – ' + fmt(t.end) + ' · ' + t.file) : '⏳ 音频待对齐';
+
+    var ops;
+    if (isTrain) {
+      if (graded[v.id]) ops = '';                         // 已评级 → 置灰无操作
+      else if (!revealed[v.id]) ops = '<button class="reveal-btn" data-reveal="' + v.id + '">揭晓</button>';
+      else ops = '<button class="grade-btn forgot" data-grade="0" data-gid="' + v.id + '">忘了</button>' +
+                 '<button class="grade-btn known" data-grade="1" data-gid="' + v.id + '">会了</button>';
+    } else {
+      ops = '<button class="op-btn play" data-play="' + v.id + '">▶ 播放</button>' +
+            '<button class="op-btn loop" data-loop="' + v.id + '">🔁 循环</button>';
+    }
+    var checkCol = isTrain ? '' :
+      '<div class="check"><input type="checkbox" data-check="' + v.id + '" aria-label="选入今日背诵" ' + checked + '></div>';
+
     return '' +
-      '<div class="verse" id="verse-' + v.id + '" data-id="' + v.id + '">' +
-        '<div class="check"><input type="checkbox" data-check="' + v.id + '" aria-label="选入今日背诵" ' + checked + '></div>' +
+      '<div class="verse' + (isTrain && graded[v.id] ? ' done' : '') + '" id="verse-' + v.id + '" data-id="' + v.id + '">' +
+        checkCol +
         '<div class="no-tag">' + noTag + '</div>' +
         '<div class="body">' +
-          '<div class="lines">' + lines + '</div>' +
-          '<div class="meta">' + audioNote + '</div>' +
+          '<div class="lines">' + linesHtml + '</div>' +
+          '<div class="meta">' + audioNote + '</div>' + mtag +
         '</div>' +
-        '<div class="ops">' +
-          '<button class="op-btn play" data-play="' + v.id + '">▶ 播放</button>' +
-          '<button class="op-btn loop" data-loop="' + v.id + '">🔁 循环</button>' +
-        '</div>' +
+        '<div class="ops">' + ops + '</div>' +
         '<div class="progress" data-prog="' + v.id + '"></div>' +
       '</div>';
   }
@@ -604,17 +810,46 @@
   // 避免每次 renderMain 给数百张卡逐一 addEventListener。
   function bindMainDelegation(root) {
     root.addEventListener("click", function (e) {
-      var b = e.target.closest("[data-play],[data-loop],[data-pin-sel]");
+      var b = e.target.closest("[data-play],[data-loop],[data-pin-sel],[data-reveal],[data-grade],[data-mask]");
       if (!b || !root.contains(b)) return;
       if (b.hasAttribute("data-play")) onSinglePlay(b.getAttribute("data-play"));
       else if (b.hasAttribute("data-loop")) onSingleLoopToggle(b.getAttribute("data-loop"));
       else if (b.hasAttribute("data-pin-sel")) togglePinSelect(b.getAttribute("data-pin-sel"));
+      else if (b.hasAttribute("data-reveal")) onReveal(b.getAttribute("data-reveal"));
+      else if (b.hasAttribute("data-grade")) onGrade(b.getAttribute("data-gid"), parseInt(b.getAttribute("data-grade"), 10));
+      else if (b.hasAttribute("data-mask")) setMask(b.getAttribute("data-mask"));
     });
     root.addEventListener("change", function (e) {
       var cb = e.target.closest("[data-check]");
-      if (cb && root.contains(cb)) toggleSelect(cb.getAttribute("data-check"), cb.checked);
+      if (cb && root.contains(cb)) { toggleSelect(cb.getAttribute("data-check"), cb.checked); return; }
+      if (e.target.id === "filterUnmastered") { onlyUnmastered = e.target.checked; renderMain(); }
     });
   }
+  // ---------- 练习交互 ----------
+  function onReveal(id) {
+    revealed[id] = true;
+    renderMain();             // 卡片显文 + 冒出 忘/会
+    onSinglePlay(id);         // 揭晓即放参考音自校
+    var el = document.getElementById("verse-" + id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function onGrade(id, grade) {
+    if (engine.mode === "single") stopEngine();      // 停掉自校音
+    if (grade === 0) {
+      // 忘了：本轮重新遮罩、当场再练；lapse 同一卡本轮只记一次（避免重练时 ease 连降）
+      if (!relearning[id]) { reviewCard(id, 0); relearning[id] = true; }
+      revealed[id] = false;
+    } else {
+      reviewCard(id, 1);                             // 会了：调度 + 本轮完成
+      graded[id] = true;
+      delete relearning[id];
+    }
+    updateBadges();
+    renderMain();                                    // 刷新遮罩/置灰/本轮计数
+    var next = document.querySelector(".verse:not(.done)");   // 推进到下一个未完成
+    if (next) next.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  function setMask(level) { maskLevel = level; renderMain(); }
 
   // 点击右栏列表中某颂 → 跳到那颂并立即播放
   function jumpToVerse(id) {
@@ -750,6 +985,8 @@
   function updateBadges() {
     document.getElementById("tabBadge").textContent = selected.size;
     document.getElementById("selCount").textContent = "已选 " + selected.size + " 颂";
+    var tb = document.getElementById("trainBadge");
+    if (tb) tb.textContent = todaySession().ids.length;   // 今日待练数
   }
   function renderToday() {
     var list = selectedOrdered();
@@ -1153,6 +1390,8 @@
     view = v;
     // 切到任一标签即退出搜索，让「全部颂 / 今日背诵」回归正常视图
     if (query) { query = ""; var si = document.getElementById("searchInput"); if (si) si.value = ""; }
+    // 进入练习：定一次本轮稳定队列（到期复习 + 受限新颂），重置揭晓/评级态
+    if (v === "train") { sessionIds = todaySession().ids; revealed = {}; graded = {}; relearning = {}; stopEngine(); }
     document.querySelectorAll(".tab").forEach(function (t) { t.classList.toggle("active", t.dataset.view === v); });
     renderMain();
   }
@@ -1163,6 +1402,8 @@
     document.getElementById("rateVal").textContent = rate;
     document.getElementById("volRange").value = vol;
     document.getElementById("volVal").textContent = Math.round(vol * 100);
+    document.getElementById("newPerDayRange").value = srs.settings.newPerDay;
+    document.getElementById("newPerDayVal").textContent = srs.settings.newPerDay;
     document.getElementById("settingsMask").classList.add("open");
     renderOfflineList();
   }
@@ -1370,6 +1611,41 @@
     localStorage.setItem(LS_VOL, vol);
     applyVol();
   });
+  document.getElementById("newPerDayRange").addEventListener("input", function () {
+    srs.settings.newPerDay = parseInt(this.value, 10);
+    document.getElementById("newPerDayVal").textContent = srs.settings.newPerDay;
+    saveSRS();
+    updateBadges();   // 待练数随上限变
+  });
+
+  // ---------- 进度备份：导出 / 导入 ----------
+  function exportProgress() {
+    var data = { app: "jushe-recite", exportedAt: new Date().toISOString(), keys: {} };
+    Object.keys(localStorage).forEach(function (k) { if (k.indexOf("kusha_") === 0) data.keys[k] = localStorage.getItem(k); });
+    var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "俱舍背诵进度-" + todayStr() + ".json";
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  function importProgress(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      var data;
+      try { data = JSON.parse(reader.result); } catch (e) { alert("文件格式不对，无法导入。"); return; }
+      if (!data || !data.keys || data.app !== "jushe-recite") { alert("这不是俱舍背诵的进度文件。"); return; }
+      var n = Object.keys(data.keys).filter(function (k) { return k.indexOf("kusha_") === 0; }).length;
+      if (!confirm("导入会用文件里的进度【替换】本机当前进度（含熟练度/选颂/设置），共 " + n + " 项。\n确定继续？")) return;
+      Object.keys(localStorage).forEach(function (k) { if (k.indexOf("kusha_") === 0) localStorage.removeItem(k); });
+      Object.keys(data.keys).forEach(function (k) { if (k.indexOf("kusha_") === 0) localStorage.setItem(k, data.keys[k]); });
+      location.reload();
+    };
+    reader.readAsText(file);
+  }
+  document.getElementById("btnExport").addEventListener("click", exportProgress);
+  document.getElementById("btnImport").addEventListener("click", function () { document.getElementById("importFile").click(); });
+  document.getElementById("importFile").addEventListener("change", function () { if (this.files && this.files[0]) importProgress(this.files[0]); this.value = ""; });
 
   // ---------- 搜索输入（防抖 150ms）----------
   var searchTimer = null;
@@ -1414,6 +1690,7 @@
       e.preventDefault(); document.getElementById("searchInput").focus(); return;
     }
     if (inField) { if (e.key === "Escape") e.target.blur(); return; }
+    if (view === "train") return;   // 练习视图不接管空格/箭头（避免误触连播）
     if (e.key === " " || e.code === "Space") { e.preventDefault(); onSeqPlay(); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); seqStep(-1); }
     else if (e.key === "ArrowRight") { e.preventDefault(); seqStep(1); }
