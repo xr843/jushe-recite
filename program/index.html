@@ -199,6 +199,11 @@
     padding: 4px 12px; border-radius: 14px; font-size: 13px;
   }
   .train-bar .masksel button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .train-bar .train-exit {
+    border: 1px solid var(--line); background: var(--paper); color: var(--ink-soft);
+    padding: 4px 12px; border-radius: 14px; font-size: 13px; cursor: pointer;
+  }
+  .train-bar .train-exit:hover { background: var(--paper); border-color: var(--accent-soft); color: var(--accent); }
   /* 本轮完成收尾面板 */
   .train-done {
     text-align: center; background: var(--paper); border: 1px solid var(--accent-soft);
@@ -718,6 +723,7 @@
     var ids = sessionIds || [];
     var doneN = ids.filter(function (id) { return graded[id]; }).length;
     return '<div class="train-bar">' +
+      '<button class="train-exit" id="btnExitTrain" title="结束练习（Esc）">‹ 结束</button>' +
       '<span class="stat">' + (trainFree ? '自由练习 · ' : '') + '本轮 <b>' + doneN + '</b> / ' + ids.length +
         (ids.length && doneN === ids.length ? ' · 完成 🎉' : '') + '</span>' +
       '<span class="stat">已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</span>' +
@@ -924,6 +930,7 @@
   // 避免每次 renderMain 给数百张卡逐一 addEventListener。
   function bindMainDelegation(root) {
     root.addEventListener("click", function (e) {
+      if (e.target.id === "btnExitTrain") { switchView("all"); return; }     // 结束练习 → 回全部颂
       if (e.target.id === "btnTrainMore") { startTrainSession(); return; }   // 再来一轮（SRS）
       if (e.target.id === "btnFreePractice" || e.target.id === "btnPracticeToday") { startFreeSession(); return; }  // 自由练习勾选的
       if (e.target.id === "btnTrainSearch") { freeSearch(); return; }        // 练搜索结果
@@ -1808,7 +1815,7 @@
       e.preventDefault(); document.getElementById("searchInput").focus(); return;
     }
     if (inField) { if (e.key === "Escape") e.target.blur(); return; }
-    if (view === "train") return;   // 练习视图不接管空格/箭头（避免误触连播）
+    if (view === "train") { if (e.key === "Escape") switchView("all"); return; }   // 练习视图：Esc 结束；不接管空格/箭头
     if (e.key === " " || e.code === "Space") { e.preventDefault(); onSeqPlay(); }
     else if (e.key === "ArrowLeft") { e.preventDefault(); seqStep(-1); }
     else if (e.key === "ArrowRight") { e.preventDefault(); seqStep(1); }
