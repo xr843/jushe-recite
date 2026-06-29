@@ -175,6 +175,11 @@
   .list-head input { accent-color: var(--accent); }
   .list-head .prog { margin-left: auto; }
   .list-head .prog b { color: var(--accent); }
+  .list-head .practice-now {
+    border: none; background: var(--accent); color: #fff; padding: 6px 16px;
+    border-radius: 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .list-head .practice-now:hover { filter: brightness(1.06); }
   .train-bar {
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
     margin: 0 0 16px; padding: 12px 16px; background: var(--accent-bg);
@@ -458,6 +463,7 @@
   var graded = {};           // 本轮「会了」的颂 id（置灰=完成 + 推进）
   var relearning = {};       // 本轮「忘了」的颂 id（已记一次 lapse，重练时不再重复扣 ease）
   var sessionIds = null;     // 本轮练习的稳定队列（进练习时定一次，评级不抽走卡片）
+  var trainFree = false;     // 自由练习：练「今日背诵」勾选的全部、不受每日上限（区别于 SRS 复习）
   var onlyUnmastered = false; // 「只看未背熟」筛选（all/today 视图）
 
   function applyVol() { audio.volume = vol; }
@@ -692,7 +698,11 @@
   // all/today 视图顶部：只看未熟筛选 + 已熟进度
   function listHead() {
     if (query) return "";
-    return '<div class="list-head">' +
+    // 今日背诵视图：一键自由练习勾选的全部（不受每日上限）—— 直接答「如何选择练习题」
+    var practiceBtn = (view === "today" && selected.size)
+      ? '<button class="practice-now" id="btnPracticeToday">▶ 练习这 ' + selected.size + ' 颂</button>'
+      : '';
+    return '<div class="list-head">' + practiceBtn +
       '<label><input type="checkbox" id="filterUnmastered"' + (onlyUnmastered ? " checked" : "") + '> 只看未背熟</label>' +
       '<span class="prog">已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</span>' +
       '</div>';
@@ -701,7 +711,7 @@
     var ids = sessionIds || [];
     var doneN = ids.filter(function (id) { return graded[id]; }).length;
     return '<div class="train-bar">' +
-      '<span class="stat">本轮 <b>' + doneN + '</b> / ' + ids.length +
+      '<span class="stat">' + (trainFree ? '自由练习 · ' : '') + '本轮 <b>' + doneN + '</b> / ' + ids.length +
         (ids.length && doneN === ids.length ? ' · 完成 🎉' : '') + '</span>' +
       '<span class="stat">已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</span>' +
       '<span class="spacer"></span>' +
@@ -710,16 +720,17 @@
         '<button data-mask="all" class="' + (maskLevel === "all" ? "on" : "") + '">全遮</button>' +
       '</span></div>';
   }
-  // 本轮全部评完后的收尾面板：小结 + 下一步（还有可练 → 再来一轮；否则今日练完的引导）
+  // 本轮全部评完后的收尾面板：小结 + 下一步
   function trainDonePanel(doneN) {
-    var more = todaySession().ids.length;   // 一轮新 session 里还有多少可练（到期/新颂配额）
     var html = '<div class="train-done">' +
       '<div class="big">🎉 本轮完成</div>' +
       '<div class="sub">这一轮练了 <b>' + doneN + '</b> 颂 · 已熟 <b>' + masteredCount() + '</b> / ' + VERSES.length + '</div>';
-    if (more > 0) {
-      html += '<button class="reveal-btn" id="btnTrainMore">再来一轮（还有 ' + more + ' 颂）</button>';
+    if (trainFree) {                            // 自由练习：再练一遍同一批
+      html += '<button class="reveal-btn" id="btnFreePractice">▶ 再练一遍这 ' + (sessionIds || []).length + ' 颂</button>';
     } else {
-      html += '<div class="sub2">今天的待练都清完了 🙏 明天再来复习巩固。<br>' +
+      var more = todaySession().ids.length;    // SRS：还有多少到期/新颂可练
+      if (more > 0) html += '<button class="reveal-btn" id="btnTrainMore">再来一轮（还有 ' + more + ' 颂）</button>';
+      else html += '<div class="sub2">今天的待练都清完了 🙏 明天再来复习巩固。<br>' +
         '想今天多学新颂，可在设置调高「每日新颂上限」，或先去「全部颂 / 今日背诵」浏览。</div>';
     }
     html += '<div class="sub3">提示：每颂要多轮复习、间隔拉到 21 天以上才算「已熟」，一次「会了」是正常的第一步。</div>';
@@ -737,13 +748,31 @@
       html += '今天练完了 🎉</div><div class="sub2">到期复习清空、今天的新颂也学完了。<br>' +
         '明天再来复习，记忆才扎实。<br>想今天多学，去设置调高「每日新颂上限」。</div>';
     }
+    // 想继续 → 自由练习勾选的（不受每日上限）
+    var selN = selectedOrdered().length;
+    if (selN) {
+      html += '<button class="reveal-btn" id="btnFreePractice">▶ 自由练习勾选的 ' + selN + ' 颂</button>' +
+        '<div class="sub3">自由练习不受每日上限，练你「今日背诵」勾选的偈颂；评级照样计入复习。</div>';
+    }
     return html + '</div>';
   }
-  // 起一轮练习（进「练习」或点「再来一轮」都走这里）
+  // 起一轮 SRS 复习（进「练习」标签 / 点「再来一轮」）
   function startTrainSession() {
+    trainFree = false;
     sessionIds = todaySession().ids;
     revealed = {}; graded = {}; relearning = {};
     stopEngine();
+    renderMain();
+    var ml = document.getElementById("mainList"); if (ml) ml.scrollTop = 0;
+  }
+  // 自由练习：练「今日背诵」勾选的全部，不受每日上限（评级照样更新 SRS）
+  function startFreeSession() {
+    var ids = selectedOrdered().map(function (v) { return v.id; });
+    if (!ids.length) { switchView("today"); return; }   // 没勾选 → 去今日背诵勾
+    view = "train"; trainFree = true;
+    sessionIds = ids; revealed = {}; graded = {}; relearning = {};
+    stopEngine();
+    document.querySelectorAll(".tab").forEach(function (t) { t.classList.toggle("active", t.dataset.view === "train"); });
     renderMain();
     var ml = document.getElementById("mainList"); if (ml) ml.scrollTop = 0;
   }
@@ -872,7 +901,8 @@
   // 避免每次 renderMain 给数百张卡逐一 addEventListener。
   function bindMainDelegation(root) {
     root.addEventListener("click", function (e) {
-      if (e.target.id === "btnTrainMore") { startTrainSession(); return; }   // 再来一轮
+      if (e.target.id === "btnTrainMore") { startTrainSession(); return; }   // 再来一轮（SRS）
+      if (e.target.id === "btnFreePractice" || e.target.id === "btnPracticeToday") { startFreeSession(); return; }  // 自由练习勾选的
       var b = e.target.closest("[data-play],[data-loop],[data-pin-sel],[data-reveal],[data-grade],[data-mask]");
       if (!b || !root.contains(b)) return;
       if (b.hasAttribute("data-play")) onSinglePlay(b.getAttribute("data-play"));
@@ -1454,7 +1484,7 @@
     // 切到任一标签即退出搜索，让「全部颂 / 今日背诵」回归正常视图
     if (query) { query = ""; var si = document.getElementById("searchInput"); if (si) si.value = ""; }
     // 进入练习：定一次本轮稳定队列（到期复习 + 受限新颂），重置揭晓/评级态
-    if (v === "train") { sessionIds = todaySession().ids; revealed = {}; graded = {}; relearning = {}; stopEngine(); }
+    if (v === "train") { trainFree = false; sessionIds = todaySession().ids; revealed = {}; graded = {}; relearning = {}; stopEngine(); }
     document.querySelectorAll(".tab").forEach(function (t) { t.classList.toggle("active", t.dataset.view === v); });
     renderMain();
   }
