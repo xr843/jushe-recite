@@ -147,8 +147,9 @@
     display: block; padding: 1px 6px; margin: 1px -6px; border-radius: 5px;
     transition: background .12s ease, color .12s ease;
   }
-  /* 跟诵：当前正在念的那一句高亮（逐句时间由真·句界或按字数插值得出） */
-  .verse .lines .ln.active { background: var(--accent-soft); color: #fff; }
+  /* 跟诵：当前正在念的那一句高亮（逐句时间由真·句界或按字数插值得出）。
+     高亮条用 fit-content，只包住本句文字，不撑满整行 */
+  .verse .lines .ln.active { background: var(--accent-soft); color: #fff; width: fit-content; max-width: 100%; }
   .verse .meta { font-size: 12px; color: var(--ink-soft); margin-top: 6px; }
   .verse .ops { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex-shrink: 0; }
   .op-btn {
