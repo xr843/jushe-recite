@@ -199,6 +199,10 @@
   .train-done .sub2 { font-size: 13px; color: var(--ink-soft); margin-top: 12px; line-height: 1.8; }
   .train-done .sub3 { font-size: 12px; color: var(--ink-soft); margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
   .train-done #btnTrainMore { margin-top: 14px; }
+  .train-tip {
+    font-size: 13px; color: var(--ink-soft); background: var(--accent-bg);
+    border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; line-height: 1.7;
+  }
   /* 遮挡的字：保留 CJK 字宽，显为灰块 */
   .verse .ln .mc { background: var(--line); color: transparent; border-radius: 3px; }
   /* 揭晓 / 评级按钮（占 .ops 位） */
@@ -487,6 +491,8 @@
 
   var byId = {};
   VERSES.forEach(function (v) { byId[v.id] = v; });
+  // 全局顺序（按 globalNo）：练习自动喂新颂、勾选不足时按这个顺序补
+  var VERSES_ORDERED = VERSES.slice().sort(function (a, b) { return a.globalNo - b.globalNo; });
 
   // ---------- 工具 ----------
   function loadSelected() {
@@ -562,12 +568,17 @@
     }
     due.sort(function (a, b) { return srs.cards[a].due - srs.cards[b].due; });
     var quota = Math.max(0, srs.settings.newPerDay - (srs.daily.newDone || 0));
-    var news = [];
+    var news = [], pick = {};
     if (quota > 0) {
-      news = selectedOrdered()
-        .filter(function (v) { return !srs.cards[v.id]; })
-        .slice(0, quota)
-        .map(function (v) { return v.id; });
+      // 新颂来源：① 先取「今日背诵」勾选的未学颂；② 不够则按全局顺序补未学颂
+      // —— 这样不用先手动勾选，点开「练习」就有得练；勾选的会被优先安排。
+      selectedOrdered().forEach(function (v) {
+        if (news.length < quota && !srs.cards[v.id] && !pick[v.id]) { news.push(v.id); pick[v.id] = 1; }
+      });
+      for (var k = 0; k < VERSES_ORDERED.length && news.length < quota; k++) {
+        var vv = VERSES_ORDERED[k];
+        if (!srs.cards[vv.id] && !pick[vv.id]) { news.push(vv.id); pick[vv.id] = 1; }
+      }
     }
     var seen = {}, out = [];
     due.concat(news).forEach(function (id) { if (!seen[id]) { seen[id] = 1; out.push(id); } });
@@ -715,6 +726,19 @@
     html += '</div>';
     return html;
   }
+  // 练习区为空时的面板：区分「今天练完」与「全部学过」，都是正向收尾。
+  function trainEmptyPanel() {
+    var anyUnstudied = false;
+    for (var i = 0; i < VERSES.length; i++) { if (!srs.cards[VERSES[i].id]) { anyUnstudied = true; break; } }
+    var html = '<div class="train-done"><div class="big">';
+    if (!anyUnstudied) {
+      html += '全部学过啦 🎉</div><div class="sub2">' + VERSES.length + ' 颂都进了复习池。<br>到期要复习的会自动出现在这里。</div>';
+    } else {
+      html += '今天练完了 🎉</div><div class="sub2">到期复习清空、今天的新颂也学完了。<br>' +
+        '明天再来复习，记忆才扎实。<br>想今天多学，去设置调高「每日新颂上限」。</div>';
+    }
+    return html + '</div>';
+  }
   // 起一轮练习（进「练习」或点「再来一轮」都走这里）
   function startTrainSession() {
     sessionIds = todaySession().ids;
@@ -730,14 +754,15 @@
     if (view === "train") {
       var ids = sessionIds || [];
       if (ids.length === 0) {
-        main.innerHTML = maskBar() +
-          '<div class="empty-hint">今天没有要练的了 🎉<br>' +
-          '到期复习已清空；想多学新颂，去「今日背诵」勾选更多，<br>或在设置调高每日新颂上限。</div>';
+        main.innerHTML = maskBar() + trainEmptyPanel();
         engine._lineCard = null; engine._lineKey = null;
         return;
       }
       var th = maskBar();
       var doneN = ids.filter(function (id) { return graded[id]; }).length;
+      if (Object.keys(srs.cards).length === 0 && doneN === 0) {   // 首次练习：教一下流程
+        th += '<div class="train-tip">遮住正文凭记忆背 → 点「揭晓」对答案 → 评「忘了 / 会了」；系统按遗忘曲线帮你安排复习。</div>';
+      }
       if (doneN === ids.length) th += trainDonePanel(doneN);   // 本轮全部完成 → 收尾面板
       ids.forEach(function (id) { if (byId[id]) th += verseCard(byId[id]); });
       main.innerHTML = th;
