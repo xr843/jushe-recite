@@ -126,6 +126,12 @@
   }
   .pin-title .pin-sel-btn:hover { background: var(--accent-bg); }
   .pin-title .pin-sel-btn.all { background: var(--accent-soft); color: #fff; border-color: var(--accent-soft); }
+  .pin-title .pin-train-btn {
+    margin-left: 8px; font-size: 13px; font-weight: 600; vertical-align: middle;
+    border: none; background: var(--accent); color: #fff;
+    padding: 5px 13px; border-radius: 6px; cursor: pointer; transition: .15s;
+  }
+  .pin-title .pin-train-btn:hover { filter: brightness(1.06); }
 
   .verse {
     background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
@@ -354,6 +360,7 @@
     .pin-title { font-size: 19px; margin: 14px 0 10px; padding-bottom: 6px; }
     .pin-title .sub { display: block; margin-left: 0; margin-top: 2px; font-size: 12px; }
     .pin-title .pin-sel-btn { margin-left: 0; margin-top: 6px; }
+    .pin-title .pin-train-btn { margin-left: 8px; margin-top: 6px; }
 
     .modal { width: 88%; max-width: 340px; }
   }
@@ -766,15 +773,26 @@
     var ml = document.getElementById("mainList"); if (ml) ml.scrollTop = 0;
   }
   // 自由练习：练「今日背诵」勾选的全部，不受每日上限（评级照样更新 SRS）
-  function startFreeSession() {
-    var ids = selectedOrdered().map(function (v) { return v.id; });
-    if (!ids.length) { switchView("today"); return; }   // 没勾选 → 去今日背诵勾
+  // 通用自由练习：直接练给定的一组颂（品 / 搜索结果 / 今日背诵选择），不受每日上限
+  function startFreePractice(ids) {
+    if (!ids || !ids.length) return;
     view = "train"; trainFree = true;
-    sessionIds = ids; revealed = {}; graded = {}; relearning = {};
+    sessionIds = ids.slice(); revealed = {}; graded = {}; relearning = {};
     stopEngine();
     document.querySelectorAll(".tab").forEach(function (t) { t.classList.toggle("active", t.dataset.view === "train"); });
     renderMain();
     var ml = document.getElementById("mainList"); if (ml) ml.scrollTop = 0;
+  }
+  function startFreeSession() {            // 从「今日背诵」勾选起
+    var ids = selectedOrdered().map(function (v) { return v.id; });
+    if (!ids.length) { switchView("today"); return; }
+    startFreePractice(ids);
+  }
+  function freePin(pin) {                  // 练整品
+    startFreePractice(versesInPin(pin).map(function (v) { return v.id; }));
+  }
+  function freeSearch() {                  // 练搜索结果
+    startFreePractice(VERSES.filter(matchesQuery).map(function (v) { return v.id; }));
   }
   function renderMain() {
     var main = document.getElementById("mainList");
@@ -821,18 +839,23 @@
         return;
       }
     }
-    var html = query ? "" : listHead();
+    // 搜索结果：一键练这些匹配的颂（直接选练习内容的第二条途径）
+    var html = query
+      ? '<div class="list-head"><button class="practice-now" id="btnTrainSearch">▶ 练习这 ' + list.length + ' 条结果</button></div>'
+      : listHead();
     var lastPin = null;
     list.forEach(function (v) {
       if (v.pin !== lastPin) {
         lastPin = v.pin;
         var meta = pinMeta(v.pin);
-        var selBtn = (view === "all" && !query)
+        // 全部颂里每品两个动作：「只背本品」(选入今日背诵) +「▶ 练本品」(直接练整品)
+        var pinBtns = (view === "all" && !query)
           ? '<button class="pin-sel-btn' + (allPinSelected(v.pin) ? ' all' : '') +
-            '" data-pin-sel="' + v.pin + '">' + pinSelBtnLabel(v.pin) + '</button>'
+              '" data-pin-sel="' + v.pin + '">' + pinSelBtnLabel(v.pin) + '</button>' +
+            '<button class="pin-train-btn" data-pin-train="' + v.pin + '">▶ 练本品</button>'
           : '';
         html += '<div class="pin-title" id="pintitle-' + v.pin + '">' + v.pin +
-                (meta ? '<span class="sub">' + meta + '</span>' : '') + selBtn + '</div>';
+                (meta ? '<span class="sub">' + meta + '</span>' : '') + pinBtns + '</div>';
       }
       html += verseCard(v);
     });
@@ -903,11 +926,13 @@
     root.addEventListener("click", function (e) {
       if (e.target.id === "btnTrainMore") { startTrainSession(); return; }   // 再来一轮（SRS）
       if (e.target.id === "btnFreePractice" || e.target.id === "btnPracticeToday") { startFreeSession(); return; }  // 自由练习勾选的
-      var b = e.target.closest("[data-play],[data-loop],[data-pin-sel],[data-reveal],[data-grade],[data-mask]");
+      if (e.target.id === "btnTrainSearch") { freeSearch(); return; }        // 练搜索结果
+      var b = e.target.closest("[data-play],[data-loop],[data-pin-sel],[data-pin-train],[data-reveal],[data-grade],[data-mask]");
       if (!b || !root.contains(b)) return;
       if (b.hasAttribute("data-play")) onSinglePlay(b.getAttribute("data-play"));
       else if (b.hasAttribute("data-loop")) onSingleLoopToggle(b.getAttribute("data-loop"));
       else if (b.hasAttribute("data-pin-sel")) togglePinSelect(b.getAttribute("data-pin-sel"));
+      else if (b.hasAttribute("data-pin-train")) freePin(b.getAttribute("data-pin-train"));
       else if (b.hasAttribute("data-reveal")) onReveal(b.getAttribute("data-reveal"));
       else if (b.hasAttribute("data-grade")) onGrade(b.getAttribute("data-gid"), parseInt(b.getAttribute("data-grade"), 10));
       else if (b.hasAttribute("data-mask")) setMask(b.getAttribute("data-mask"));
