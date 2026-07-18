@@ -44,7 +44,7 @@ python3 serve.py            # 默认 8777 端口；支持 HTTP Range（浏览器
 # 浏览器打开 http://localhost:8777/program/index.html
 ```
 
-部署到 Cloudflare Pages 后，`serve.py` 仅本地开发用 — CDN 原生支持 Range。整个 app（浏览 / 跟诵 / 检索 / 离线 / 背诵训练）都在 `program/index.html` 一个文件里，纯 vanilla JS、无构建、无依赖。
+部署到 Cloudflare Pages 后，`serve.py` 仅本地开发用 — CDN 原生支持 Range。整个 app（浏览 / 跟诵 / 检索 / 离线 / 背诵训练）在 `program/` 下的 `index.html`（页面结构）+ `app.js`（全部逻辑）+ `app.css`（全部样式）里，纯 vanilla JS、无构建、无依赖；线上启用严格 CSP（`script-src 'self'`）+ 安全响应头（见 `_headers`）。
 
 ## 目录结构 / Layout
 
@@ -52,7 +52,9 @@ python3 serve.py            # 默认 8777 端口；支持 HTTP Range（浏览器
 index.html               根入口，重定向到 /program/
 manifest.json sw.js      PWA：清单 + service worker（窄范围离线缓存）
 program/
-  index.html             整个单页 app（浏览 / 跟诵 / 检索 / 训练 / 离线，纯 vanilla 无构建）
+  index.html             页面结构（HTML 外壳；样式与逻辑已抽到 app.css / app.js）
+  app.css                全部样式（原内联 <style> 抽出，配合严格 CSP）
+  app.js                 整个单页逻辑：浏览 / 跟诵 / 检索 / 训练 / 离线（纯 vanilla，无构建）
   verses.js              偈颂文本（607 颂，由 extract_verses.py 从 docx 生成；流通分 4 颂手工补入）
   timings.js             逐颂时间戳（由 build_timings.py 从 aligned_*.json 合并）
   trans.js               每颂白话解 + 科判（由 extract_trans.py 从「偈颂白话解.docx」生成）
@@ -63,6 +65,7 @@ program/
   align.py               单品强制对齐脚本（faster-whisper 字级时间戳 → 逐颂 [start,end]）
   build_timings.py       合并 aligned_*.json → timings.js
   serve.py               本地 HTTP Range 服务（仅开发用）
+  test_player.js         播放引擎离线状态机测试（node test_player.js）
 600颂-单品/*.mp3          8 个品的念诵音频，已 ffmpeg loudnorm 至 -14 LUFS
 600颂-单品/*.opus         同上的 Opus 版（48k mono，约省 2/3 体积）；浏览器支持则优先用，否则回退 mp3
 文本资料/                  偈颂校对版 docx
