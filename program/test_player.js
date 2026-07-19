@@ -27,14 +27,20 @@ const audio = {
   pause(){ this.paused=true; },
 };
 const ids = {};
+// app.js 版引擎比旧内联版多用了 createElement/body（错误横幅、Opus 探测）与 window/location/navigator
 global.document = {
   getElementById(id){ if(id==="audio") return audio; return ids[id] || (ids[id]=fakeEl()); },
   querySelector(){ return fakeEl(); },
   querySelectorAll(){ return []; },
+  createElement(){ return fakeEl(); },
+  addEventListener(){}, removeEventListener(){},
+  body: fakeEl(), documentElement: fakeEl(),
 };
 const store = {};
-global.localStorage = { getItem:k=>k in store?store[k]:null, setItem:(k,v)=>{store[k]=String(v);} };
-global.window = {};
+global.localStorage = { getItem:k=>k in store?store[k]:null, setItem:(k,v)=>{store[k]=String(v);}, removeItem:k=>{delete store[k];} };
+global.window = { addEventListener(){}, removeEventListener(){}, matchMedia:()=>({matches:false,addEventListener(){}}) };
+global.location = { href:"https://x/program/", hash:"", reload(){}, replace(){} };
+global.navigator = { serviceWorker:{ addEventListener(){}, register(){ return { then(){ return { catch(){} }; } }; } } };
 global.setInterval = (fn)=>{ intervalCb = fn; return 1; };
 global.clearInterval = ()=>{ intervalCb = null; };
 global.encodeURIComponent = encodeURIComponent;
@@ -48,12 +54,12 @@ global.clearTimeout = ()=>{};
 // ---------- 载入数据 + 引擎 ----------
 let code = fs.readFileSync(path.join(DIR,"verses.js"),"utf8") + "\n";
 code += fs.readFileSync(path.join(DIR,"timings.js"),"utf8") + "\n";
-let html = fs.readFileSync(path.join(DIR,"index.html"),"utf8");
-// 取"包含播放引擎"的那个 <script>（页面末尾还有一个注销 SW 的 <script>，不能直接 .pop()）
-let engineSrc = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
-  .map(function (m) { return m[1]; })
-  .filter(function (s) { return s.indexOf("function playCurrent") !== -1; })
-  .pop();
+// 引擎自 3e734ce 起从 index.html 内联 <script> 抽到了 app.js（严格 CSP）。
+// app.js = 主引擎 IIFE + 末尾的 SW 注册；这里只取到引擎 IIFE 结尾那行 "})();"。
+const appLines = fs.readFileSync(path.join(DIR,"app.js"),"utf8").split("\n");
+const engineEnd = appLines.findIndex(function (l) { return /^\}\)\(\);\s*$/.test(l); });
+if (engineEnd < 0) throw new Error("app.js 中找不到引擎 IIFE 结尾 })();");
+let engineSrc = appLines.slice(0, engineEnd + 1).join("\n");
 // 暴露内部函数供测试（仅改测试副本，不动 index.html）
 engineSrc = engineSrc.replace(/\}\)\(\);\s*$/,
   '; global.__T={get engine(){return engine;}, onSinglePlay, onSingleLoopToggle, onSeqPlay, onSeqLoopToggle, seqStep, stopEngine, playCurrent, selected, byId}; })();');
