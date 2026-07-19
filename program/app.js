@@ -750,6 +750,7 @@
     clearTimeout(engine.loadWatch);
     engine.seekToken = (engine.seekToken || 0) + 1;   // 作废任何在途的 seekThenPlay，别在停止后又出声
     audio.pause();
+    audio.muted = false;                              // 别把「解锁静音」态留给下次播放（否则续播无声）
     engine.mode = null; engine.queue = []; engine.index = 0; engine.paused = false;
     resetAllProgress(); syncPlayingUI();
   }
@@ -758,6 +759,7 @@
     if (engine.timer) { clearInterval(engine.timer); engine.timer = null; }
     engine.seekToken = (engine.seekToken || 0) + 1;   // 同上：暂停后不应被在途 seek 重新唤醒
     audio.pause();
+    audio.muted = false;                              // 同 stopEngine：不把静音态留到续播
     engine.paused = true;
     syncPlayingUI();
   }
@@ -844,6 +846,14 @@
     } else {
       doPlay();
     }
+    // iOS/Safari 关键：只放行「用户手势任务内同步调用」的 play()。本引擎为了不放错颂，
+    // 真正出声要等 loadedmetadata + seek 落点确认（已脱离手势任务），于是 Safari 会以
+    // NotAllowedError 静默拒绝（错误被 catch 吞掉）→ 用户「点了播放没有声音」。
+    // 这里在手势内先【静音】起播，把元素解锁；seekThenPlay 确认落到本颂起点后再取消静音。
+    // 静音期间即使位置还在片头也听不见，因此不会退回「放错颂」的老问题。
+    audio.muted = true;
+    var unlock = audio.play();
+    if (unlock && unlock.catch) unlock.catch(function () {});
     startTimer();
     syncPlayingUI();
   }
@@ -861,6 +871,7 @@
     var attempt = function () {
       if (token !== engine.seekToken) return;          // 已被新的播放请求接管 → 放弃本次
       if (Math.abs(audio.currentTime - target) <= 0.35) {
+        audio.muted = false;                           // 落点已确认 → 解除静音，真正出声
         audio.play().catch(function () {});            // 已落到本颂起点 → 出声
         return;
       }
@@ -873,6 +884,7 @@
         setTimeout(attempt, 100);
         return;
       }
+      audio.muted = false;                              // 兜底也必须解除静音，否则永远无声
       audio.play().catch(function () {});               // 兜底：仍出声，由 tick() 守卫继续纠正
     };
     setTimeout(attempt, 50);
@@ -1238,6 +1250,7 @@
     clearTimeout(engine.loadWatch);
     engine.seekToken = (engine.seekToken || 0) + 1;
     audio.pause();
+    audio.muted = false;                              // 同上：错误后别留静音态
     engine.paused = true;
     syncPlayingUI();
     document.getElementById("nowPlaying").innerHTML = "⚠ 音频加载失败，请检查网络后点 ▶ 重试";
